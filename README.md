@@ -63,6 +63,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+### Running the Example
+
+Request ICE servers using the provided example:
+
+```bash
+cargo run --example request_ice_servers -- \
+  --product-id wp-your-product \
+  --device-id wd-your-device \
+  --private-key device_key.pem
+```
+
+To see all available options:
+```bash
+cargo run --example request_ice_servers -- --help
+```
+
 ### HTTP API
 
 The SDK implements two HTTP endpoints:
