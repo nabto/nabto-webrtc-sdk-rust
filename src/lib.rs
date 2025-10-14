@@ -1,18 +1,17 @@
 //! Nabto WebRTC SDK for Rust
 //!
 //! This library provides a Rust interface for WebRTC signaling using the Nabto platform.
+//! This SDK focuses on device-side implementation.
 
-pub mod client;
 pub mod error;
-pub mod signaling;
+pub mod signaling_device;
 pub mod types;
 
 pub use error::{Error, Result};
+pub use signaling_device::{SignalingDevice, SignalingDeviceOptions};
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn test_basic() {
         // Basic test placeholder
