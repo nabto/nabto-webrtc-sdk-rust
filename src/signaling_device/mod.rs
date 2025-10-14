@@ -4,12 +4,16 @@
 
 mod channel;
 mod connection;
+mod http;
 mod reliability;
 mod routing;
 mod state;
 
 pub use channel::{SignalingChannel, SignalingChannelEventHandler};
+pub use http::IceServer;
 pub use state::{ChannelState, ConnectionState};
+
+use http::HttpApi;
 
 use crate::Result;
 use std::future::Future;
@@ -40,46 +44,73 @@ pub struct SignalingDeviceOptions {
 
 /// The main SignalingDevice interface
 pub struct SignalingDevice {
-    // Internal state will be added during implementation
+    http_api: HttpApi,
+    options: SignalingDeviceOptions,
+    state: ConnectionState,
+    new_channel_handler: Option<NewChannelHandler>,
 }
 
 impl SignalingDevice {
     /// Create a new SignalingDevice
-    pub fn new(_options: SignalingDeviceOptions) -> Self {
-        Self {}
+    pub fn new(options: SignalingDeviceOptions) -> Self {
+        let endpoint_url = options
+            .endpoint_url
+            .clone()
+            .unwrap_or_else(|| format!("https://{}.webrtc.nabto.net", options.product_id));
+
+        let http_api = HttpApi::new(
+            endpoint_url,
+            options.product_id.clone(),
+            options.device_id.clone(),
+        );
+
+        Self {
+            http_api,
+            options,
+            state: ConnectionState::New,
+            new_channel_handler: None,
+        }
     }
 
     /// Start the signaling device
     pub async fn start(&mut self) -> Result<()> {
+        // Implementation will be added later
+        self.state = ConnectionState::Connecting;
         Ok(())
     }
 
     /// Close the signaling device
     pub async fn close(&mut self) -> Result<()> {
+        // Implementation will be added later
+        self.state = ConnectionState::Closed;
         Ok(())
     }
 
     /// Request ICE servers from the signaling service
     pub async fn request_ice_servers(&self) -> Result<Vec<IceServer>> {
-        Ok(vec![])
+        let token = (self.options.token_generator)().await?;
+        self.http_api.request_ice_servers(&token).await
     }
 
     /// Check if the connection is still alive
-    pub fn check_alive(&self) {}
+    pub fn check_alive(&self) {
+        // Implementation will be added later
+    }
 
     /// Get the current connection state
     pub fn connection_state(&self) -> ConnectionState {
-        ConnectionState::New
+        self.state
     }
 
     /// Set the handler for new signaling channels
-    pub fn set_new_channel_handler(&mut self, _handler: NewChannelHandler) {}
-}
+    pub fn set_new_channel_handler(&mut self, handler: NewChannelHandler) {
+        self.new_channel_handler = Some(handler);
+    }
 
-/// ICE server configuration
-#[derive(Debug, Clone)]
-pub struct IceServer {
-    pub urls: Vec<String>,
-    pub username: Option<String>,
-    pub credential: Option<String>,
+    /// Internal method to perform device connect HTTP request
+    pub(crate) async fn device_connect(&self) -> Result<String> {
+        let token = (self.options.token_generator)().await?;
+        let response = self.http_api.device_connect(&token).await?;
+        Ok(response.signaling_url)
+    }
 }

@@ -8,9 +8,12 @@ This SDK provides a Rust interface for establishing WebRTC connections using Nab
 
 ## Features
 
-- WebRTC signaling through Nabto
-- Async/await support
-- Type-safe API
+- Device-side WebRTC signaling through Nabto
+- HTTP API for device connect and ICE server requests
+- Async/await support with Tokio
+- Type-safe API with Rust types
+- WebSocket connection management (in progress)
+- Reliability layer for ordered message delivery (in progress)
 - Cross-platform compatibility
 
 ## Installation
@@ -20,12 +23,67 @@ Add this to your `Cargo.toml`:
 ```toml
 [dependencies]
 nabto-webrtc-sdk = "0.1.0"
+tokio = { version = "1.0", features = ["full"] }
 ```
 
 ## Usage
 
+### Basic Example
+
 ```rust
-// Example usage will be added as the SDK is developed
+use nabto_webrtc_sdk::{SignalingDevice, SignalingDeviceOptions};
+use std::future::Future;
+use std::pin::Pin;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Create a token generator
+    let token_generator = Box::new(|| {
+        Box::pin(async {
+            // Generate your JWT token here
+            Ok("your-jwt-token".to_string())
+        }) as Pin<Box<dyn Future<Output = Result<String, nabto_webrtc_sdk::Error>> + Send>>
+    });
+
+    // Create signaling device
+    let options = SignalingDeviceOptions {
+        endpoint_url: None, // Uses default: https://{product_id}.webrtc.nabto.net
+        product_id: "wp-your-product".to_string(),
+        device_id: "wd-your-device".to_string(),
+        token_generator,
+    };
+
+    let device = SignalingDevice::new(options);
+
+    // Request ICE servers
+    let ice_servers = device.request_ice_servers().await?;
+    println!("Retrieved {} ICE servers", ice_servers.len());
+
+    Ok(())
+}
+```
+
+### HTTP API
+
+The SDK implements two HTTP endpoints:
+
+#### 1. Device Connect
+```rust
+// POST /v1/device/connect
+// Returns signaling URL for WebSocket connection
+let signaling_url = device.device_connect().await?;
+```
+
+#### 2. ICE Servers (TURN Credentials)
+```rust
+// POST /v1/ice-servers
+// Returns STUN and TURN server configurations
+let ice_servers = device.request_ice_servers().await?;
+for server in ice_servers {
+    println!("URLs: {:?}", server.urls);
+    println!("Username: {:?}", server.username);
+    println!("Credential: {:?}", server.credential);
+}
 ```
 
 ## Development Status
