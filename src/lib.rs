@@ -8,7 +8,9 @@ pub mod signaling_device;
 pub mod types;
 
 pub use error::{Error, Result};
-pub use signaling_device::{IceServer, SignalingDevice, SignalingDeviceOptions};
+pub use signaling_device::{
+    DeviceTokenGenerator, IceServer, SignalingDevice, SignalingDeviceOptions,
+};
 
 #[cfg(test)]
 mod tests {

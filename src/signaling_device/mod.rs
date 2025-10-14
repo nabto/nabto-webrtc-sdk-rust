@@ -8,10 +8,12 @@ mod http;
 mod reliability;
 mod routing;
 mod state;
+mod token;
 
 pub use channel::{SignalingChannel, SignalingChannelEventHandler};
 pub use http::IceServer;
 pub use state::{ChannelState, ConnectionState};
+pub use token::DeviceTokenGenerator;
 
 use http::HttpApi;
 

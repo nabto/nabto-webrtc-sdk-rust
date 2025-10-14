@@ -10,7 +10,7 @@
 //!   cargo run --example request_ice_servers -- --product-id wp-abcdefghi --device-id wd-jklmnopqr --private-key device_key.pem
 
 use clap::Parser;
-use nabto_webrtc_sdk::{SignalingDevice, SignalingDeviceOptions};
+use nabto_webrtc_sdk::{DeviceTokenGenerator, SignalingDevice, SignalingDeviceOptions};
 use std::fs;
 use std::future::Future;
 use std::pin::Pin;
@@ -61,21 +61,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let device_id_for_token = device_id.clone();
 
     // Create a token generator that uses the private key
-    // TODO: Implement JWT token generation using the private key
     let token_generator = Box::new(move || {
-        let _key = private_key.clone();
-        let prod_id = product_id_for_token.clone();
-        let dev_id = device_id_for_token.clone();
+        let generator = DeviceTokenGenerator::new(
+            product_id_for_token.clone(),
+            device_id_for_token.clone(),
+            private_key.clone(),
+        );
 
         Box::pin(async move {
-            // TODO: Generate JWT token with the private key
-            // For now, this is a placeholder
-            eprintln!("WARNING: JWT token generation not yet implemented");
-            eprintln!("         Using placeholder token (will fail authentication)");
-            eprintln!("         TODO: Implement JWT signing with ES256 algorithm");
-
-            // Return a placeholder token
-            Ok(format!("placeholder-token-for-{}-{}", prod_id, dev_id))
+            // Generate JWT token with the private key
+            generator.generate_token()
         }) as Pin<Box<dyn Future<Output = Result<String, nabto_webrtc_sdk::Error>> + Send>>
     });
 
