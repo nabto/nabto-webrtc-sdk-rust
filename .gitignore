@@ -19,3 +19,4 @@ Thumbs.db
 # Testing
 *.profraw
 *.profdata
+.testdata
