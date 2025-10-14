@@ -20,6 +20,9 @@ pub enum Error {
     /// WebRTC error
     WebRTC(String),
 
+    /// WebSocket error
+    WebSocket(String),
+
     /// Generic error
     Other(String),
 }
@@ -31,6 +34,7 @@ impl fmt::Display for Error {
             Error::Signaling(msg) => write!(f, "Signaling error: {}", msg),
             Error::Configuration(msg) => write!(f, "Configuration error: {}", msg),
             Error::WebRTC(msg) => write!(f, "WebRTC error: {}", msg),
+            Error::WebSocket(msg) => write!(f, "WebSocket error: {}", msg),
             Error::Other(msg) => write!(f, "Error: {}", msg),
         }
     }

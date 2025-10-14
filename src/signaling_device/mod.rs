@@ -17,9 +17,11 @@ pub use token::DeviceTokenGenerator;
 
 use http::HttpApi;
 
-use crate::Result;
+use crate::{Error, Result};
 use std::future::Future;
 use std::pin::Pin;
+use tokio_tungstenite::{connect_async, WebSocketStream, MaybeTlsStream};
+use tokio::net::TcpStream;
 
 /// Callback type for generating access tokens
 pub type TokenGenerator =
@@ -50,6 +52,7 @@ pub struct SignalingDevice {
     options: SignalingDeviceOptions,
     state: ConnectionState,
     new_channel_handler: Option<NewChannelHandler>,
+    ws_connection: Option<WebSocketStream<MaybeTlsStream<TcpStream>>>,
 }
 
 impl SignalingDevice {
@@ -71,13 +74,33 @@ impl SignalingDevice {
             options,
             state: ConnectionState::New,
             new_channel_handler: None,
+            ws_connection: None,
         }
     }
 
     /// Start the signaling device
     pub async fn start(&mut self) -> Result<()> {
-        // Implementation will be added later
+        // Update state to Connecting
         self.state = ConnectionState::Connecting;
+
+        // Step 1: Perform device connect HTTP request to get signaling URL
+        let signaling_url = self.device_connect().await.map_err(|e| {
+            self.state = ConnectionState::Failed;
+            e
+        })?;
+
+        // Step 2: Establish WebSocket connection to the signaling URL
+        let (ws_stream, _response) = connect_async(&signaling_url).await.map_err(|e| {
+            self.state = ConnectionState::Failed;
+            Error::WebSocket(format!("Failed to connect WebSocket: {}", e))
+        })?;
+
+        // Store the WebSocket connection
+        self.ws_connection = Some(ws_stream);
+
+        // Step 3: Update state to Connected
+        self.state = ConnectionState::Connected;
+
         Ok(())
     }
 
