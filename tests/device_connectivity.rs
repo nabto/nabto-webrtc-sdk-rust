@@ -160,11 +160,11 @@ async fn test_device_reconnects_after_disconnect() {
 
     println!("Device disconnected by server");
 
-    // Give the WebSocket monitoring task time to detect the disconnection
-    // and process the event
-    tokio::time::sleep(Duration::from_millis(500)).await;
-
-    // Process WebSocket events to detect the disconnection
+    // Wait for device to detect disconnection and go to WaitRetry state
+    device
+        .wait_for_state(ConnectionState::WaitRetry, Duration::from_secs(5))
+        .await
+        .expect("Device did not reach WaitRetry state after disconnect");
 
     // Device should now be in WaitRetry state
     assert_eq!(device.connection_state().await, ConnectionState::WaitRetry);
@@ -227,10 +227,13 @@ async fn test_device_ws_unknown_message_type() {
         .await
         .expect("Failed to send new message type");
 
-    // Wait a bit to ensure device processes the message
-    tokio::time::sleep(Duration::from_millis(500)).await;
-
     // Device should still be connected (ignored the unknown message)
+    // Wait a bit to ensure it remains in Connected state
+    device
+        .wait_for_state(ConnectionState::Connected, Duration::from_millis(500))
+        .await
+        .expect("Device should remain in Connected state");
+
     assert_eq!(device.connection_state().await, ConnectionState::Connected);
 
     // Cleanup

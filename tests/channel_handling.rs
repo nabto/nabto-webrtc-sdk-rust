@@ -53,27 +53,31 @@ async fn test_channel_creation_on_client_connect() {
         .expect("Failed to send message from client");
     println!("Client sent message to device");
 
-    // Give time for WebSocket messages to arrive
-    tokio::time::sleep(Duration::from_millis(500)).await;
-
-    // Process events
-
-    // Check for NewChannel event
+    // Wait for NewChannel event
     let mut new_channel_received = false;
-    while let Ok(event) = event_rx.try_recv() {
-        match event {
-            DeviceEvent::NewChannel { channel, authorized } => {
-                println!(
-                    "Received NewChannel event for channel {} (authorized: {})",
-                    channel.channel_id(),
-                    authorized
-                );
-                new_channel_received = true;
-                assert!(!authorized); // Client connects without authorization in basic test
+    let timeout = Duration::from_secs(5);
+    let start = std::time::Instant::now();
+
+    while start.elapsed() < timeout && !new_channel_received {
+        match tokio::time::timeout(Duration::from_millis(100), event_rx.recv()).await {
+            Ok(Some(event)) => {
+                match event {
+                    DeviceEvent::NewChannel { channel, authorized } => {
+                        println!(
+                            "Received NewChannel event for channel {} (authorized: {})",
+                            channel.channel_id(),
+                            authorized
+                        );
+                        new_channel_received = true;
+                        assert!(!authorized); // Client connects without authorization in basic test
+                    }
+                    DeviceEvent::StateChanged { old_state, new_state } => {
+                        println!("Device state changed: {:?} -> {:?}", old_state, new_state);
+                    }
+                }
             }
-            DeviceEvent::StateChanged { old_state, new_state } => {
-                println!("Device state changed: {:?} -> {:?}", old_state, new_state);
-            }
+            Ok(None) => break,
+            Err(_) => continue,
         }
     }
 
@@ -140,27 +144,30 @@ async fn test_multiple_channel_creation() {
         .expect("Failed to send message from second client");
     println!("Second client sent message to device");
 
-    // Give time for WebSocket messages to arrive
-    tokio::time::sleep(Duration::from_millis(500)).await;
-
-    // Process events
-
-    // Check for NewChannel events
+    // Wait for NewChannel events from both clients
     let mut channel_count = 0;
     let mut channel_ids = Vec::new();
+    let timeout = Duration::from_secs(5);
+    let start = std::time::Instant::now();
 
-    while let Ok(event) = event_rx.try_recv() {
-        match event {
-            DeviceEvent::NewChannel { channel, authorized } => {
-                println!(
-                    "Received NewChannel event for channel {} (authorized: {})",
-                    channel.channel_id(),
-                    authorized
-                );
-                channel_ids.push(channel.channel_id().to_string());
-                channel_count += 1;
+    while start.elapsed() < timeout && channel_count < 2 {
+        match tokio::time::timeout(Duration::from_millis(100), event_rx.recv()).await {
+            Ok(Some(event)) => {
+                match event {
+                    DeviceEvent::NewChannel { channel, authorized } => {
+                        println!(
+                            "Received NewChannel event for channel {} (authorized: {})",
+                            channel.channel_id(),
+                            authorized
+                        );
+                        channel_ids.push(channel.channel_id().to_string());
+                        channel_count += 1;
+                    }
+                    DeviceEvent::StateChanged { .. } => {}
+                }
             }
-            DeviceEvent::StateChanged { .. } => {}
+            Ok(None) => break,
+            Err(_) => continue,
         }
     }
 
@@ -218,19 +225,29 @@ async fn test_non_initial_message_rejected() {
         .await
         .expect("Failed to send message from client");
 
-    // Give time for initial connection
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    // Wait for NewChannel event
+    let timeout = Duration::from_secs(5);
+    let start = std::time::Instant::now();
+    let mut channel_received = false;
 
-    // Consume the NewChannel event
-    while let Ok(_) = event_rx.try_recv() {}
+    while start.elapsed() < timeout && !channel_received {
+        match tokio::time::timeout(Duration::from_millis(100), event_rx.recv()).await {
+            Ok(Some(event)) => {
+                if matches!(event, DeviceEvent::NewChannel { .. }) {
+                    channel_received = true;
+                }
+            }
+            Ok(None) => break,
+            Err(_) => continue,
+        }
+    }
+
+    assert!(channel_received, "Expected NewChannel event");
 
     // Now disconnect the client
     test.disconnect_client(&client_id)
         .await
         .expect("Failed to disconnect client");
-
-    // Give time for disconnection to propagate
-    tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Try to send a message to the now-closed channel
     // This should be handled gracefully (no crash)
@@ -276,14 +293,20 @@ async fn test_channel_receives_messages() {
         .expect("Failed to send initial message from client");
     println!("Client sent initial message to device");
 
-    // Give time for connection and initial message
-    tokio::time::sleep(Duration::from_millis(500)).await;
-
-    // Verify NewChannel event was received
+    // Wait for NewChannel event
     let mut new_channel_received = false;
-    while let Ok(event) = event_rx.try_recv() {
-        if matches!(event, DeviceEvent::NewChannel { .. }) {
-            new_channel_received = true;
+    let timeout = Duration::from_secs(5);
+    let start = std::time::Instant::now();
+
+    while start.elapsed() < timeout && !new_channel_received {
+        match tokio::time::timeout(Duration::from_millis(100), event_rx.recv()).await {
+            Ok(Some(event)) => {
+                if matches!(event, DeviceEvent::NewChannel { .. }) {
+                    new_channel_received = true;
+                }
+            }
+            Ok(None) => break,
+            Err(_) => continue,
         }
     }
     assert!(new_channel_received, "Expected NewChannel event");
@@ -298,9 +321,6 @@ async fn test_channel_receives_messages() {
         .expect("Failed to send messages from client");
 
     println!("Sent {} messages from client", messages.len());
-
-    // Give time for messages to arrive
-    tokio::time::sleep(Duration::from_millis(500)).await;
 
     // At this point, the channel should have processed the messages
     // The messages go through the reliability layer and are queued in the channel
