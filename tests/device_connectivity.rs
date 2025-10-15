@@ -24,7 +24,7 @@ async fn test_device_connect_ok() {
         .await
         .expect("Failed to create test instance");
 
-    let mut device = test.create_signaling_device();
+    let (mut device, _event_rx) = test.create_signaling_device();
 
     // Device should start in New state
     assert_eq!(device.connection_state(), ConnectionState::New);
@@ -54,7 +54,7 @@ async fn test_device_close() {
         .await
         .expect("Failed to create test instance");
 
-    let mut device = test.create_signaling_device();
+    let (mut device, _event_rx) = test.create_signaling_device();
 
     // Start and wait for connection
     device.start().await.expect("Failed to start device");
@@ -85,7 +85,7 @@ async fn test_device_http_error_retry() {
     .await
     .expect("Failed to create test instance");
 
-    let mut device = test.create_signaling_device();
+    let (mut device, _event_rx) = test.create_signaling_device();
 
     // Start the device
     device.start().await.expect("Failed to start device");
@@ -115,7 +115,7 @@ async fn test_device_websocket_error_retry() {
     .await
     .expect("Failed to create test instance");
 
-    let mut device = test.create_signaling_device();
+    let (mut device, _event_rx) = test.create_signaling_device();
 
     // Start the device
     device.start().await.expect("Failed to start device");
@@ -142,7 +142,7 @@ async fn test_device_reconnects_after_disconnect() {
         .await
         .expect("Failed to create test instance");
 
-    let mut device = test.create_signaling_device();
+    let (mut device, _event_rx) = test.create_signaling_device();
 
     // Start and wait for initial connection
     device.start().await.expect("Failed to start device");
@@ -191,7 +191,7 @@ async fn test_device_http_extensibility() {
     .await
     .expect("Failed to create test instance");
 
-    let mut device = test.create_signaling_device();
+    let (mut device, _event_rx) = test.create_signaling_device();
 
     // Device should still connect successfully even with extra fields
     device.start().await.expect("Failed to start device");
@@ -216,7 +216,7 @@ async fn test_device_ws_unknown_message_type() {
         .await
         .expect("Failed to create test instance");
 
-    let mut device = test.create_signaling_device();
+    let (mut device, _event_rx) = test.create_signaling_device();
 
     // Start and connect
     device.start().await.expect("Failed to start device");

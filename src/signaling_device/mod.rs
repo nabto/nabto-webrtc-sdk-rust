@@ -19,6 +19,7 @@ pub use token::DeviceTokenGenerator;
 use http::HttpApi;
 
 use crate::{Error, Result};
+use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -38,9 +39,21 @@ const MAX_RECONNECT_WAIT_SECONDS: u32 = 60;
 pub type TokenGenerator =
     Box<dyn Fn() -> Pin<Box<dyn Future<Output = Result<String>> + Send>> + Send + Sync>;
 
-/// Callback type for handling new signaling channels
-pub type NewChannelHandler =
-    Box<dyn Fn(SignalingChannel, bool) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+/// Events emitted by the SignalingDevice
+#[derive(Debug)]
+pub enum DeviceEvent {
+    /// A new signaling channel is ready
+    NewChannel {
+        channel: SignalingChannel,
+        authorized: bool,
+    },
+
+    /// Connection state changed
+    StateChanged {
+        old_state: ConnectionState,
+        new_state: ConnectionState,
+    },
+}
 
 /// Options for creating a SignalingDevice
 pub struct SignalingDeviceOptions {
@@ -62,11 +75,16 @@ pub struct SignalingDevice {
     http_api: HttpApi,
     options: SignalingDeviceOptions,
     state: ConnectionState,
-    new_channel_handler: Option<NewChannelHandler>,
+
+    // Event channel for emitting device events
+    device_event_tx: mpsc::Sender<DeviceEvent>,
 
     // WebSocket connection
     ws_handle: Option<WebSocketHandle>,
     ws_event_rx: Option<mpsc::Receiver<ConnectionEvent>>,
+
+    // Channel management
+    channels: HashMap<String, SignalingChannel>,
 
     // Retry state
     reconnect_counter: u32,
@@ -76,7 +94,10 @@ pub struct SignalingDevice {
 
 impl SignalingDevice {
     /// Create a new SignalingDevice
-    pub fn new(options: SignalingDeviceOptions) -> Self {
+    ///
+    /// Returns the device instance and a receiver for device events.
+    /// The receiver should be polled to handle NewChannel events and other device events.
+    pub fn new(options: SignalingDeviceOptions) -> (Self, mpsc::Receiver<DeviceEvent>) {
         let endpoint_url = options
             .endpoint_url
             .clone()
@@ -88,17 +109,22 @@ impl SignalingDevice {
             options.device_id.clone(),
         );
 
-        Self {
+        let (device_event_tx, device_event_rx) = mpsc::channel(32);
+
+        let device = Self {
             http_api,
             options,
             state: ConnectionState::New,
-            new_channel_handler: None,
+            device_event_tx,
             ws_handle: None,
             ws_event_rx: None,
+            channels: HashMap::new(),
             reconnect_counter: 0,
             connected_at: None,
             should_stop: Arc::new(Mutex::new(false)),
-        }
+        };
+
+        (device, device_event_rx)
     }
 
     /// Start the signaling device
@@ -250,11 +276,6 @@ impl SignalingDevice {
     /// Get the current connection state
     pub fn connection_state(&self) -> ConnectionState {
         self.state
-    }
-
-    /// Set the handler for new signaling channels
-    pub fn set_new_channel_handler(&mut self, handler: NewChannelHandler) {
-        self.new_channel_handler = Some(handler);
     }
 
     /// Internal method to perform device connect HTTP request

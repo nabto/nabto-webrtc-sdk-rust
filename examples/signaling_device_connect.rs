@@ -88,11 +88,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Create the signaling device
-    let mut device = SignalingDevice::new(options);
+    let (mut device, mut event_rx) = SignalingDevice::new(options);
 
     println!("📱 SignalingDevice created");
     println!("   Connection state: {:?}", device.connection_state());
     println!();
+
+    // Spawn a task to handle device events
+    tokio::spawn(async move {
+        while let Some(event) = event_rx.recv().await {
+            match event {
+                nabto_webrtc_sdk::DeviceEvent::NewChannel { channel, authorized } => {
+                    println!("📡 New channel received!");
+                    println!("   Channel ID: {:?}", channel);
+                    println!("   Authorized: {}", authorized);
+                }
+                nabto_webrtc_sdk::DeviceEvent::StateChanged { old_state, new_state } => {
+                    println!("🔄 State changed: {:?} -> {:?}", old_state, new_state);
+                }
+            }
+        }
+    });
 
     // Start the device - this will:
     // 1. Make device connect HTTP request

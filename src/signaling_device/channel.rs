@@ -17,6 +17,7 @@ pub trait SignalingChannelEventHandler: Send + Sync {
 }
 
 /// Represents a logical channel between two peers through the WebSocket relay
+#[derive(Debug)]
 pub struct SignalingChannel {
     channel_id: Option<String>,
     state: ChannelState,

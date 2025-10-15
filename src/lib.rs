@@ -9,7 +9,8 @@ pub mod types;
 
 pub use error::{Error, Result};
 pub use signaling_device::{
-    ConnectionState, DeviceTokenGenerator, IceServer, SignalingDevice, SignalingDeviceOptions,
+    ConnectionState, DeviceEvent, DeviceTokenGenerator, IceServer, SignalingDevice,
+    SignalingDeviceOptions,
 };
 
 #[cfg(test)]

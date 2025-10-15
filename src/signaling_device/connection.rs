@@ -58,18 +58,14 @@ pub enum ConnectionEvent {
 /// Configuration for WebSocket connection
 #[derive(Debug, Clone)]
 pub struct WebSocketConfig {
-    /// How often to send PING messages (milliseconds)
-    pub ping_interval_ms: u64,
-
-    /// Maximum time to wait for PONG response (milliseconds)
+    /// Maximum time to wait for PONG response after check_alive() is called (milliseconds)
     pub pong_timeout_ms: u64,
 }
 
 impl Default for WebSocketConfig {
     fn default() -> Self {
         Self {
-            ping_interval_ms: 30_000, // 30 seconds
-            pong_timeout_ms: 5_000,   // 5 seconds
+            pong_timeout_ms: 2_000,   // 2 seconds
         }
     }
 }
@@ -88,8 +84,8 @@ pub struct WebSocketConnection {
     /// Configuration
     config: WebSocketConfig,
 
-    /// Last time a PONG was received
-    last_pong: Instant,
+    /// Time when PING was sent (for timeout detection)
+    ping_sent_at: Option<Instant>,
 }
 
 /// Commands that can be sent to the WebSocket connection
@@ -153,7 +149,7 @@ impl WebSocketConnection {
             command_rx,
             ws_stream,
             config,
-            last_pong: Instant::now(),
+            ping_sent_at: None,
         };
 
         let handle = WebSocketHandle { command_tx };
@@ -168,25 +164,17 @@ impl WebSocketConnection {
         // Notify that connection is open
         let _ = self.event_tx.send(ConnectionEvent::Open).await;
 
-        // Set up PING timer
-        let ping_duration = Duration::from_millis(self.config.ping_interval_ms);
-        let mut ping_interval = interval(ping_duration);
-        ping_interval.tick().await; // First tick completes immediately
+        // Set up PONG timeout checker (every 100ms)
+        let mut timeout_interval = interval(Duration::from_millis(100));
+        timeout_interval.tick().await; // First tick completes immediately
 
         loop {
             tokio::select! {
-                // Check for PING timeout and send PING
-                _ = ping_interval.tick() => {
+                // Check for PONG timeout if PING was sent
+                _ = timeout_interval.tick() => {
                     if self.check_ping_timeout() {
-                        eprintln!("PING timeout - closing connection");
+                        eprintln!("PING timeout - no PONG received within {} seconds", self.config.pong_timeout_ms as f64 / 1000.0);
                         let _ = self.event_tx.send(ConnectionEvent::PingTimeout).await;
-                        break;
-                    }
-
-                    // Send PING
-                    if let Err(e) = self.send_routing_message(&RoutingMessage::Ping).await {
-                        eprintln!("Failed to send PING: {}", e);
-                        let _ = self.event_tx.send(ConnectionEvent::ConnectionError(e)).await;
                         break;
                     }
                 }
@@ -222,8 +210,13 @@ impl WebSocketConnection {
                             }
                         }
                         Some(ConnectionCommand::SendPing) => {
+                            // Arm the PONG timeout timer
+                            self.ping_sent_at = Some(Instant::now());
+
                             if let Err(e) = self.send_routing_message(&RoutingMessage::Ping).await {
                                 eprintln!("Failed to send PING: {}", e);
+                                let _ = self.event_tx.send(ConnectionEvent::ConnectionError(e)).await;
+                                break;
                             }
                         }
                         Some(ConnectionCommand::Close) | None => {
@@ -239,9 +232,14 @@ impl WebSocketConnection {
     }
 
     /// Check if PING timeout has occurred
+    /// Only returns true if a PING was sent and no PONG was received within the timeout
     fn check_ping_timeout(&self) -> bool {
-        let timeout_duration = Duration::from_millis(self.config.pong_timeout_ms);
-        self.last_pong.elapsed() > timeout_duration
+        if let Some(ping_time) = self.ping_sent_at {
+            let timeout_duration = Duration::from_millis(self.config.pong_timeout_ms);
+            ping_time.elapsed() > timeout_duration
+        } else {
+            false
+        }
     }
 
     /// Handle incoming WebSocket message
@@ -319,8 +317,8 @@ impl WebSocketConnection {
                     .await;
             }
             RoutingMessage::Pong => {
-                // Update last PONG time
-                self.last_pong = Instant::now();
+                // Clear the PING timeout timer (PONG received successfully)
+                self.ping_sent_at = None;
             }
             RoutingMessage::Ping => {
                 // Respond with PONG

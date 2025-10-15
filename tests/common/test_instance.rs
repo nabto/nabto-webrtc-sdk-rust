@@ -1,9 +1,10 @@
 //! Test instance helper for integration tests
 
 use super::test_client::{DeviceTestOptions, TestClient};
-use nabto_webrtc_sdk::{SignalingDevice, SignalingDeviceOptions, ConnectionState};
+use nabto_webrtc_sdk::{DeviceEvent, SignalingDevice, SignalingDeviceOptions, ConnectionState};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tokio::sync::mpsc;
 
 /// Helper struct for managing a device test instance
 pub struct DeviceTestInstance {
@@ -34,9 +35,9 @@ impl DeviceTestInstance {
     }
 
     /// Create a SignalingDevice configured for this test
-    pub fn create_signaling_device(&self) -> SignalingDevice {
+    /// Returns the device and a receiver for device events
+    pub fn create_signaling_device(&self) -> (SignalingDevice, mpsc::Receiver<DeviceEvent>) {
         let access_token = self.access_token.clone();
-        let _observed_states = self.observed_states.clone();
 
         let token_generator = Box::new(move || {
             let token = access_token.clone();
@@ -46,18 +47,12 @@ impl DeviceTestInstance {
                 >
         });
 
-        let device = SignalingDevice::new(SignalingDeviceOptions {
+        SignalingDevice::new(SignalingDeviceOptions {
             endpoint_url: Some(self.endpoint_url.clone()),
             product_id: self.product_id.clone(),
             device_id: self.device_id.clone(),
             token_generator,
-        });
-
-        // TODO: Add event listener for connection state changes
-        // This requires implementing an event emitter pattern in the SDK
-        // For now, we'll need to manually track states in tests
-
-        device
+        })
     }
 
     /// Record a connection state change (to be called manually from tests for now)
