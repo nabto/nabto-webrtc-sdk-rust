@@ -18,20 +18,30 @@ pub use token::DeviceTokenGenerator;
 use http::HttpApi;
 
 use crate::{Error, Result};
+use futures::StreamExt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
-use tokio::time::{sleep, Instant};
-use tokio_tungstenite::{connect_async, WebSocketStream, MaybeTlsStream};
+use tokio::sync::{mpsc, Mutex};
+use tokio::time::Instant;
 use tokio::net::TcpStream;
+use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 
 /// Minimum time between a successful connection and reconnect counter reset (10 seconds)
 const RECONNECT_COUNTER_RESET_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Maximum reconnect wait time (60 seconds)
 const MAX_RECONNECT_WAIT_SECONDS: u32 = 60;
+
+/// Internal events from WebSocket monitoring task
+#[derive(Debug)]
+enum WebSocketEvent {
+    /// WebSocket connection was closed
+    Closed,
+    /// WebSocket connection encountered an error
+    Error(String),
+}
 
 /// Callback type for generating access tokens
 pub type TokenGenerator =
@@ -62,7 +72,9 @@ pub struct SignalingDevice {
     options: SignalingDeviceOptions,
     state: ConnectionState,
     new_channel_handler: Option<NewChannelHandler>,
-    ws_connection: Option<WebSocketStream<MaybeTlsStream<TcpStream>>>,
+
+    // WebSocket monitoring
+    ws_event_rx: Option<mpsc::Receiver<WebSocketEvent>>,
 
     // Retry state
     reconnect_counter: u32,
@@ -89,7 +101,7 @@ impl SignalingDevice {
             options,
             state: ConnectionState::New,
             new_channel_handler: None,
-            ws_connection: None,
+            ws_event_rx: None,
             reconnect_counter: 0,
             connected_at: None,
             should_stop: Arc::new(Mutex::new(false)),
@@ -153,10 +165,43 @@ impl SignalingDevice {
             Error::WebSocket(format!("Failed to connect WebSocket: {}", e))
         })?;
 
-        // Store the WebSocket connection
-        self.ws_connection = Some(ws_stream);
+        // Step 3: Spawn a task to monitor the WebSocket connection
+        let (tx, rx) = mpsc::channel(32);
+        self.ws_event_rx = Some(rx);
+
+        tokio::spawn(async move {
+            Self::monitor_websocket(ws_stream, tx).await;
+        });
 
         Ok(())
+    }
+
+    /// Background task to monitor WebSocket connection
+    /// Sends events through the channel when connection closes or errors occur
+    async fn monitor_websocket(
+        mut ws_stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
+        tx: mpsc::Sender<WebSocketEvent>,
+    ) {
+        loop {
+            match ws_stream.next().await {
+                Some(Ok(_message)) => {
+                    // TODO: Handle incoming WebSocket messages
+                    // For now, we just keep the connection alive
+                }
+                Some(Err(e)) => {
+                    // WebSocket error occurred
+                    eprintln!("WebSocket error: {:?}", e);
+                    let _ = tx.send(WebSocketEvent::Error(e.to_string())).await;
+                    break;
+                }
+                None => {
+                    // WebSocket connection closed
+                    eprintln!("WebSocket connection closed");
+                    let _ = tx.send(WebSocketEvent::Closed).await;
+                    break;
+                }
+            }
+        }
     }
 
 
@@ -169,10 +214,8 @@ impl SignalingDevice {
         // Stop any retry loops
         *self.should_stop.lock().await = true;
 
-        // Close WebSocket connection if exists
-        if let Some(_ws) = self.ws_connection.take() {
-            // WebSocket will be dropped and closed
-        }
+        // Close event receiver (WebSocket monitoring task will be dropped)
+        self.ws_event_rx = None;
 
         self.state = ConnectionState::Closed;
         Ok(())
@@ -184,9 +227,34 @@ impl SignalingDevice {
         self.http_api.request_ice_servers(&token).await
     }
 
-    /// Check if the connection is still alive
+    /// The check alive function is used to send a PING on the websocket. This
+    /// can be used if it has been detected that the WebRTC connection has
+    /// disconnected, this could often mean that the WebSocket has a problem. If
+    /// a PONG is not received timely after calling check_alive, then the
+    /// websocket disconnects and a new signaling connection is made to the
+    /// signaling service.
     pub fn check_alive(&self) {
+        // TODO: Send PING message on WebSocket
         // Implementation will be added later
+    }
+
+    /// Process any pending WebSocket events (for testing/polling)
+    /// In a real application, this would be handled automatically in the background
+    pub async fn process_events(&mut self) {
+        if let Some(rx) = &mut self.ws_event_rx {
+            // Try to receive an event without blocking
+            if let Ok(event) = rx.try_recv() {
+                match event {
+                    WebSocketEvent::Closed | WebSocketEvent::Error(_) => {
+                        eprintln!("WebSocket disconnected: {:?}", event);
+                        // Transition to WaitRetry
+                        if self.state == ConnectionState::Connected {
+                            self.state = ConnectionState::WaitRetry;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Get the current connection state
