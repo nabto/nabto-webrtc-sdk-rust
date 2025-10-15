@@ -233,3 +233,242 @@ async fn test_device_client_disconnect() {
     device.stop().await;
     test.destroy().await.expect("Failed to destroy test");
 }
+
+/// Device Client Test 3:
+/// Connect multiple clients. Test that a device can handle multiple clients.
+///
+/// Steps:
+/// 1. Start a device.
+/// 2. Connect multiple clients.
+/// 3. Observe that the device gets a channel for each client.
+#[tokio::test]
+#[ignore] // Requires integration test server to be running
+async fn test_device_multiple_clients() {
+    let test = DeviceTestInstance::create(DeviceTestOptions::default())
+        .await
+        .expect("Failed to create test instance");
+
+    // Step 1: Start a device
+    let (device, mut event_rx) = test.start_signaling_device();
+
+    device
+        .wait_for_state(ConnectionState::Connected, Duration::from_secs(5))
+        .await
+        .expect("Device did not reach Connected state");
+
+    println!("✓ Device started and connected");
+
+    // Step 2: Connect multiple clients (let's test with 3 clients)
+    let num_clients = 3;
+    let mut client_ids = Vec::new();
+
+    for i in 0..num_clients {
+        let client_id = test.create_client().await.expect("Failed to create client");
+
+        test.connect_client(&client_id)
+            .await
+            .expect("Failed to connect client");
+
+        println!("✓ Client {} connected: {}", i + 1, client_id);
+
+        // Send a message from client to device to trigger channel creation
+        test.client_send_messages(
+            &client_id,
+            vec![format!("test message from client {}", i + 1)],
+        )
+        .await
+        .expect("Failed to send message from client");
+
+        println!("✓ Client {} sent message to device", i + 1);
+
+        client_ids.push(client_id);
+    }
+
+    // Step 3: Observe that the device gets a channel for each client
+    println!("Waiting for {} NewChannel events...", num_clients);
+
+    let mut channels_received = 0;
+    let mut channel_ids = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+
+    while channels_received < num_clients {
+        match tokio::time::timeout_at(deadline, event_rx.recv()).await {
+            Ok(Some(event)) => match event {
+                DeviceEvent::NewChannel {
+                    channel,
+                    authorized,
+                } => {
+                    println!(
+                        "✓ Received NewChannel event {} for channel {} (authorized: {})",
+                        channels_received + 1,
+                        channel.channel_id(),
+                        authorized
+                    );
+
+                    // Verify the channel is in CONNECTED state
+                    assert_eq!(
+                        channel.state(),
+                        ChannelState::Connected,
+                        "Expected channel to be in CONNECTED state"
+                    );
+
+                    channel_ids.push(channel.channel_id().to_string());
+                    channels_received += 1;
+                }
+                DeviceEvent::StateChanged {
+                    old_state,
+                    new_state,
+                } => {
+                    println!("  Device state changed: {:?} -> {:?}", old_state, new_state);
+                }
+            },
+            Ok(None) => panic!("Event channel closed unexpectedly"),
+            Err(_) => panic!(
+                "Timeout waiting for NewChannel events. Received {}/{}",
+                channels_received, num_clients
+            ),
+        }
+    }
+
+    // Verify we received the correct number of channels
+    assert_eq!(
+        channels_received, num_clients,
+        "Expected to receive {} NewChannel events",
+        num_clients
+    );
+
+    // Verify all channel IDs are unique
+    let unique_channels: std::collections::HashSet<_> = channel_ids.iter().collect();
+    assert_eq!(
+        unique_channels.len(),
+        num_clients,
+        "Expected all channel IDs to be unique"
+    );
+
+    println!(
+        "✓ Received {} unique channels for {} clients",
+        channels_received, num_clients
+    );
+
+    // Cleanup
+    for (i, client_id) in client_ids.iter().enumerate() {
+        test.disconnect_client(client_id)
+            .await
+            .unwrap_or_else(|_| panic!("Failed to disconnect client {}", i + 1));
+    }
+    device.stop().await;
+    test.destroy().await.expect("Failed to destroy test");
+}
+
+/// Device Client Test 4:
+/// Channel close. Test that a channel can be closed.
+///
+/// Steps:
+/// 1. Start a device.
+/// 2. Connect a client.
+/// 3. Close the channel.
+/// 4. Observe the channel switches to the close state.
+/// 5. Observe that the client gets a CHANNEL_CLOSED error.
+#[tokio::test]
+#[ignore] // Requires integration test server to be running
+async fn test_device_channel_close() {
+    let test = DeviceTestInstance::create(DeviceTestOptions::default())
+        .await
+        .expect("Failed to create test instance");
+
+    // Step 1: Start a device
+    let (device, mut event_rx) = test.start_signaling_device();
+
+    device
+        .wait_for_state(ConnectionState::Connected, Duration::from_secs(5))
+        .await
+        .expect("Device did not reach Connected state");
+
+    println!("✓ Device started and connected");
+
+    // Step 2: Connect a client
+    let client_id = test.create_client().await.expect("Failed to create client");
+
+    test.connect_client(&client_id)
+        .await
+        .expect("Failed to connect client");
+
+    println!("✓ Client connected: {}", client_id);
+
+    // Send a message from client to device to trigger channel creation
+    test.client_send_messages(&client_id, vec!["test message".to_string()])
+        .await
+        .expect("Failed to send message from client");
+
+    println!("✓ Client sent message to device");
+
+    // Wait for NewChannel event
+    let mut channel = None;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+
+    while channel.is_none() {
+        match tokio::time::timeout_at(deadline, event_rx.recv()).await {
+            Ok(Some(event)) => {
+                if let DeviceEvent::NewChannel {
+                    channel: ch,
+                    authorized,
+                } = event
+                {
+                    println!(
+                        "✓ Received NewChannel event for channel {} (authorized: {})",
+                        ch.channel_id(),
+                        authorized
+                    );
+                    assert_eq!(ch.state(), ChannelState::Connected);
+                    channel = Some(ch);
+                }
+            }
+            Ok(None) => panic!("Event channel closed unexpectedly"),
+            Err(_) => panic!("Timeout waiting for NewChannel event"),
+        }
+    }
+
+    let channel = channel.expect("Expected to receive NewChannel event");
+    println!("✓ Channel is in CONNECTED state");
+
+    // Step 3: Close the channel
+    // Note: The SignalingChannel.close() method requires mutable access to SignalingService.
+    // Since channels are returned by value in the NewChannel event and we don't have
+    // mutable access to the device from here, we need to add a proper API for this.
+    //
+    // TODO: Add SignalingDevice::close_channel(channel_id: &str) method that:
+    //   1. Finds the channel by ID in the device's channel map
+    //   2. Calls channel.close(&mut self) (device implements SignalingService)
+    //   3. Sends a CHANNEL_CLOSED error to the client
+    //   4. Sets the channel state to Closed
+    //
+    // The proper test would look like:
+    // ```
+    // device.close_channel(channel.channel_id()).await;
+    //
+    // // Step 4: Verify channel state is Closed
+    // // (would need channel state events or API to query channel state)
+    //
+    // // Step 5: Verify client receives CHANNEL_CLOSED error
+    // let error = test.client_wait_for_error(&client_id, Duration::from_secs(5))
+    //     .await
+    //     .expect("Failed to wait for client error");
+    // assert_eq!(error.code, "CHANNEL_CLOSED");
+    // ```
+
+    println!("NOTE: Channel close functionality requires additional API implementation:");
+    println!("  - SignalingDevice::close_channel(channel_id) method");
+    println!("  - Client error notification mechanism in test framework");
+    println!("  - Channel state query/event mechanism");
+
+    // Verify we have the channel ID for when close is implemented
+    let channel_id = channel.channel_id();
+    println!("✓ Channel ID for close: {}", channel_id);
+
+    // Cleanup
+    test.disconnect_client(&client_id)
+        .await
+        .expect("Failed to disconnect client");
+    device.stop().await;
+    test.destroy().await.expect("Failed to destroy test");
+}

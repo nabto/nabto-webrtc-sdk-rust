@@ -25,3 +25,11 @@ rand = "0.8"
 [dev-dependencies]
 tokio-test = "0.4"
 clap = { version = "4.5", features = ["derive"] }
+
+[profile.release-size]
+inherits = "release"
+opt-level = "z"          # Optimize for size
+lto = true               # Enable Link Time Optimization
+codegen-units = 1        # Better optimization with single codegen unit
+strip = true             # Strip symbols from binary
+panic = "abort"          # Abort on panic (smaller binary)
