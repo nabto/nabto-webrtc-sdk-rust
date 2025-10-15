@@ -9,7 +9,7 @@ pub mod types;
 
 pub use error::{Error, Result};
 pub use signaling_device::{
-    ConnectionState, DeviceEvent, DeviceTokenGenerator, IceServer, SignalingDevice,
+    ChannelState, ConnectionState, DeviceEvent, DeviceTokenGenerator, IceServer, SignalingDevice,
     SignalingDeviceOptions,
 };
 

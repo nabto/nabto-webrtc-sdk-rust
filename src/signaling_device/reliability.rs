@@ -21,6 +21,7 @@ pub enum ReliabilityMessage {
 }
 
 /// Reliability layer for ensuring ordered, reliable message delivery
+#[derive(Debug, Clone)]
 pub struct Reliability {
     /// Next sequence number to send
     send_seq: u32,
@@ -108,6 +109,11 @@ impl Reliability {
     /// Check if a message is an initial message (seq 0)
     pub fn is_initial_message(message: &ReliabilityMessage) -> bool {
         matches!(message, ReliabilityMessage::Data { seq: 0, .. })
+    }
+
+    /// Get the current receive sequence number
+    pub fn recv_seq(&self) -> u32 {
+        self.recv_seq
     }
 }
 

@@ -10,15 +10,17 @@ mod routing;
 mod state;
 mod token;
 
-pub use channel::{SignalingChannel, SignalingChannelEventHandler};
+pub use channel::{SignalingChannel, SignalingChannelEventHandler, SignalingService};
 pub use connection::{ConnectionEvent, WebSocketConfig, WebSocketConnection, WebSocketHandle};
 pub use http::IceServer;
 pub use state::{ChannelState, ConnectionState};
 pub use token::DeviceTokenGenerator;
 
 use http::HttpApi;
+use routing::{ErrorInfo, RoutingMessage};
 
 use crate::{Error, Result};
+use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -241,35 +243,135 @@ impl SignalingDevice {
     /// Process any pending WebSocket events (for testing/polling)
     /// In a real application, this would be handled automatically in the background
     pub async fn process_events(&mut self) {
+        // Collect all pending events first to avoid borrow checker issues
+        let mut events = Vec::new();
         if let Some(rx) = &mut self.ws_event_rx {
-            // Process all pending events without blocking
             while let Ok(event) = rx.try_recv() {
-                match event {
-                    ConnectionEvent::Open => {
-                        eprintln!("WebSocket connection opened");
-                    }
-                    ConnectionEvent::Closed | ConnectionEvent::ConnectionError(_) | ConnectionEvent::PingTimeout => {
-                        eprintln!("WebSocket disconnected: {:?}", event);
-                        // Transition to WaitRetry
-                        if self.state == ConnectionState::Connected {
-                            self.state = ConnectionState::WaitRetry;
-                        }
-                    }
-                    ConnectionEvent::Message { channel_id, message, authorized } => {
-                        // TODO: Handle incoming messages
-                        eprintln!("Received message on channel {}: {:?} (authorized: {})", channel_id, message, authorized);
-                    }
-                    ConnectionEvent::Error { channel_id, code, message } => {
-                        eprintln!("Error on channel {}: {} - {:?}", channel_id, code, message);
-                    }
-                    ConnectionEvent::PeerConnected { channel_id } => {
-                        eprintln!("Peer connected on channel {}", channel_id);
-                    }
-                    ConnectionEvent::PeerOffline { channel_id } => {
-                        eprintln!("Peer offline on channel {}", channel_id);
+                events.push(event);
+            }
+        }
+
+        eprintln!("Processing {} events", events.len());
+
+        // Now process the events
+        for event in events {
+            match event {
+                ConnectionEvent::Open => {
+                    eprintln!("WebSocket connection opened");
+                }
+                ConnectionEvent::Closed | ConnectionEvent::ConnectionError(_) | ConnectionEvent::PingTimeout => {
+                    eprintln!("WebSocket disconnected: {:?}", event);
+                    // Transition to WaitRetry
+                    if self.state == ConnectionState::Connected {
+                        self.state = ConnectionState::WaitRetry;
                     }
                 }
+                ConnectionEvent::Message { channel_id, message, authorized } => {
+                    eprintln!("Received MESSAGE event for channel {}", channel_id);
+                    self.handle_message(channel_id, message, authorized).await;
+                }
+                ConnectionEvent::Error { channel_id, code, message } => {
+                    self.handle_channel_error(channel_id, code, message);
+                }
+                ConnectionEvent::PeerConnected { channel_id } => {
+                    self.handle_peer_connected(channel_id);
+                }
+                ConnectionEvent::PeerOffline { channel_id } => {
+                    self.handle_peer_offline(channel_id);
+                }
             }
+        }
+    }
+
+    /// Handle incoming message on a channel
+    async fn handle_message(&mut self, channel_id: String, message: JsonValue, authorized: bool) {
+        eprintln!("handle_message called for channel_id={}, authorized={}", channel_id, authorized);
+        // Check if we have an existing channel
+        if self.channels.contains_key(&channel_id) {
+            eprintln!("Channel already exists");
+
+            // Remove channel temporarily to avoid borrow issues
+            let mut channel = self.channels.remove(&channel_id).unwrap();
+
+            // Dispatch to existing channel
+            if let Err(e) = channel.handle_routing_message(message, self) {
+                eprintln!("Error handling message on channel {}: {:?}", channel_id, e);
+            }
+
+            // Put the channel back
+            self.channels.insert(channel_id, channel);
+        } else {
+            eprintln!("No existing channel, checking if initial message...");
+            // No existing channel - check if this is an initial message (seq 0)
+            match SignalingChannel::is_initial_message(&message) {
+                Ok(true) => {
+                    eprintln!("Initial message detected, creating new channel");
+                    // Create new channel
+                    let mut channel = SignalingChannel::new(channel_id.clone());
+                    channel.set_state(ChannelState::Connected);
+
+                    // Handle the initial message
+                    if let Err(e) = channel.handle_routing_message(message, self) {
+                        eprintln!("Error handling initial message on channel {}: {:?}", channel_id, e);
+                        return;
+                    }
+
+                    // Emit NewChannel event before adding to map
+                    let event = DeviceEvent::NewChannel {
+                        channel: channel.clone(), // TODO: Need to implement Clone or use Arc
+                        authorized,
+                    };
+
+                    if let Err(e) = self.device_event_tx.try_send(event) {
+                        eprintln!("Failed to emit NewChannel event: {:?}", e);
+                    }
+
+                    // Add to channels map
+                    self.channels.insert(channel_id, channel);
+                }
+                Ok(false) => {
+                    // Not an initial message and no channel exists - send error
+                    eprintln!("Received non-initial message for unknown channel: {}", channel_id);
+                    let error = ErrorInfo {
+                        code: routing::error_codes::CHANNEL_NOT_FOUND.to_string(),
+                        message: Some(format!("Channel {} not found", channel_id)),
+                    };
+                    self.send_error(&channel_id, error);
+                }
+                Err(e) => {
+                    eprintln!("Failed to parse message for channel {}: {:?}", channel_id, e);
+                }
+            }
+        }
+    }
+
+    /// Handle error on a channel
+    fn handle_channel_error(&mut self, channel_id: String, code: String, message: Option<String>) {
+        if let Some(channel) = self.channels.get_mut(&channel_id) {
+            let error = Error::Signaling(format!(
+                "Channel error: {} - {}",
+                code,
+                message.unwrap_or_default()
+            ));
+            channel.handle_error(error);
+        }
+    }
+
+    /// Handle peer connected notification
+    fn handle_peer_connected(&mut self, channel_id: String) {
+        if self.channels.contains_key(&channel_id) {
+            // Remove channel temporarily to avoid borrow issues
+            let mut channel = self.channels.remove(&channel_id).unwrap();
+            channel.handle_peer_connected(self);
+            // Put the channel back
+            self.channels.insert(channel_id, channel);
+        }
+    }
+
+    /// Handle peer offline notification
+    fn handle_peer_offline(&mut self, channel_id: String) {
+        if let Some(channel) = self.channels.get_mut(&channel_id) {
+            channel.handle_peer_offline();
         }
     }
 
@@ -283,5 +385,58 @@ impl SignalingDevice {
         let token = (self.options.token_generator)().await?;
         let response = self.http_api.device_connect(&token).await?;
         Ok(response.signaling_url)
+    }
+}
+
+/// Implement SignalingService trait so channels can send messages through the device
+impl SignalingService for SignalingDevice {
+    fn send_routing_message(&self, channel_id: &str, message: JsonValue) {
+        if self.state != ConnectionState::Connected {
+            return; // Can't send if not connected
+        }
+
+        if let Some(handle) = &self.ws_handle {
+            // Wrap message in routing layer
+            let routing_msg = RoutingMessage::Message {
+                channel_id: channel_id.to_string(),
+                message,
+                authorized: None,
+            };
+
+            // Serialize and send
+            if let Ok(_json) = serde_json::to_value(&routing_msg) {
+                // Send through WebSocket (fire and forget)
+                let handle_clone = handle.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = handle_clone.send_message(routing_msg).await {
+                        eprintln!("Failed to send routing message: {}", e);
+                    }
+                });
+            }
+        }
+    }
+
+    fn send_error(&self, channel_id: &str, error: ErrorInfo) {
+        if self.state != ConnectionState::Connected {
+            return;
+        }
+
+        if let Some(handle) = &self.ws_handle {
+            let routing_msg = RoutingMessage::Error {
+                channel_id: channel_id.to_string(),
+                error,
+            };
+
+            let handle_clone = handle.clone();
+            tokio::spawn(async move {
+                if let Err(e) = handle_clone.send_message(routing_msg).await {
+                    eprintln!("Failed to send error message: {}", e);
+                }
+            });
+        }
+    }
+
+    fn close_channel(&mut self, channel_id: &str) {
+        self.channels.remove(channel_id);
     }
 }
