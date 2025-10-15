@@ -1,5 +1,8 @@
 //! Common utilities for integration tests
 
+#![allow(dead_code)] // Test utilities may not all be used yet
+#![allow(unused_imports)]
+
 pub mod test_client;
 pub mod test_instance;
 

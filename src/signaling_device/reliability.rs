@@ -67,11 +67,10 @@ impl Reliability {
 
     /// Handle ACK message
     fn handle_ack(&mut self, seq: u32) {
-        if let Some(first) = self.unacked_messages.first() {
-            if let ReliabilityMessage::Data { seq: first_seq, .. } = first {
-                if *first_seq == seq {
-                    self.unacked_messages.remove(0);
-                }
+        if let Some(ReliabilityMessage::Data { seq: first_seq, .. }) = self.unacked_messages.first()
+        {
+            if *first_seq == seq {
+                self.unacked_messages.remove(0);
             }
         }
     }

@@ -33,6 +33,7 @@ pub trait SignalingChannelEventHandler: Send + Sync {
 
 /// Operations to be processed in order
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // NewChannel variant planned for future use
 enum Operation {
     /// Initial channel setup operation
     NewChannel,

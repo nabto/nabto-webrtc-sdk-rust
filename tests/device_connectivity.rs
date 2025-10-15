@@ -32,7 +32,8 @@ async fn test_device_connect_ok() {
     // Start the device
 
     // Wait for device to reach Connected state
-    device.wait_for_state( ConnectionState::Connected, Duration::from_secs(5))
+    device
+        .wait_for_state(ConnectionState::Connected, Duration::from_secs(5))
         .await
         .expect("Device did not reach Connected state");
 
@@ -56,7 +57,8 @@ async fn test_device_close() {
     let (device, _event_rx) = test.start_signaling_device();
 
     // Start and wait for connection
-    device.wait_for_state( ConnectionState::Connected, Duration::from_secs(5))
+    device
+        .wait_for_state(ConnectionState::Connected, Duration::from_secs(5))
         .await
         .expect("Device did not reach Connected state");
 
@@ -94,7 +96,8 @@ async fn test_device_http_error_retry() {
     // Start the device
 
     // The device should go to WaitRetry state due to HTTP failure
-    device.wait_for_state( ConnectionState::WaitRetry, Duration::from_secs(5))
+    device
+        .wait_for_state(ConnectionState::WaitRetry, Duration::from_secs(5))
         .await
         .expect("Device did not reach WaitRetry state");
 
@@ -123,7 +126,8 @@ async fn test_device_websocket_error_retry() {
     // Start the device
 
     // The device should go to WaitRetry state due to WebSocket failure
-    device.wait_for_state( ConnectionState::WaitRetry, Duration::from_secs(5))
+    device
+        .wait_for_state(ConnectionState::WaitRetry, Duration::from_secs(5))
         .await
         .expect("Device did not reach WaitRetry state");
 
@@ -147,7 +151,8 @@ async fn test_device_reconnects_after_disconnect() {
     let (device, _event_rx) = test.start_signaling_device();
 
     // Start and wait for initial connection
-    device.wait_for_state( ConnectionState::Connected, Duration::from_secs(5))
+    device
+        .wait_for_state(ConnectionState::Connected, Duration::from_secs(5))
         .await
         .expect("Device did not reach Connected state initially");
 
@@ -194,7 +199,8 @@ async fn test_device_http_extensibility() {
     let (device, _event_rx) = test.start_signaling_device();
 
     // Device should still connect successfully even with extra fields
-    device.wait_for_state( ConnectionState::Connected, Duration::from_secs(5))
+    device
+        .wait_for_state(ConnectionState::Connected, Duration::from_secs(5))
         .await
         .expect("Device did not reach Connected state");
 
@@ -218,7 +224,8 @@ async fn test_device_ws_unknown_message_type() {
     let (device, _event_rx) = test.start_signaling_device();
 
     // Start and connect
-    device.wait_for_state( ConnectionState::Connected, Duration::from_secs(5))
+    device
+        .wait_for_state(ConnectionState::Connected, Duration::from_secs(5))
         .await
         .expect("Device did not reach Connected state");
 

@@ -35,7 +35,6 @@ const RECONNECT_COUNTER_RESET_TIMEOUT: Duration = Duration::from_secs(10);
 /// Maximum reconnect wait time (60 seconds)
 const MAX_RECONNECT_WAIT_SECONDS: u32 = 60;
 
-
 /// Callback type for generating access tokens
 pub type TokenGenerator =
     Box<dyn Fn() -> Pin<Box<dyn Future<Output = Result<String>> + Send>> + Send + Sync>;
@@ -314,15 +313,25 @@ impl SignalingDevice {
             ConnectionEvent::Open => {
                 eprintln!("WebSocket connection opened");
             }
-            ConnectionEvent::Closed | ConnectionEvent::ConnectionError(_) | ConnectionEvent::PingTimeout => {
+            ConnectionEvent::Closed
+            | ConnectionEvent::ConnectionError(_)
+            | ConnectionEvent::PingTimeout => {
                 eprintln!("WebSocket disconnected: {:?}", event);
                 self.transition_to_reconnect();
             }
-            ConnectionEvent::Message { channel_id, message, authorized } => {
+            ConnectionEvent::Message {
+                channel_id,
+                message,
+                authorized,
+            } => {
                 eprintln!("Received MESSAGE event for channel {}", channel_id);
                 self.handle_message(channel_id, message, authorized).await;
             }
-            ConnectionEvent::Error { channel_id, code, message } => {
+            ConnectionEvent::Error {
+                channel_id,
+                code,
+                message,
+            } => {
                 self.handle_channel_error(channel_id, code, message);
             }
             ConnectionEvent::PeerConnected { channel_id } => {
@@ -340,9 +349,9 @@ impl SignalingDevice {
         let signaling_url = self.device_connect().await?;
 
         // Step 2: Establish WebSocket connection to the signaling URL
-        let (ws_stream, _response) = connect_async(&signaling_url).await.map_err(|e| {
-            Error::WebSocket(format!("Failed to connect WebSocket: {}", e))
-        })?;
+        let (ws_stream, _response) = connect_async(&signaling_url)
+            .await
+            .map_err(|e| Error::WebSocket(format!("Failed to connect WebSocket: {}", e)))?;
 
         // Step 3: Create WebSocketConnection and spawn it as a task
         let config = WebSocketConfig::default();
@@ -357,7 +366,6 @@ impl SignalingDevice {
 
         Ok(())
     }
-
 
     /// Stop the signaling device
     ///
@@ -391,7 +399,7 @@ impl SignalingDevice {
     /// signaling service.
     pub async fn check_alive(&self) -> Result<()> {
         if let Some(handle) = &self.ws_handle {
-            handle.send_ping().await.map_err(|e| Error::WebSocket(e))?;
+            handle.send_ping().await.map_err(Error::WebSocket)?;
         }
         Ok(())
     }
@@ -406,7 +414,10 @@ impl SignalingDevice {
 
     /// Handle incoming message on a channel
     async fn handle_message(&mut self, channel_id: String, message: JsonValue, authorized: bool) {
-        eprintln!("handle_message called for channel_id={}, authorized={}", channel_id, authorized);
+        eprintln!(
+            "handle_message called for channel_id={}, authorized={}",
+            channel_id, authorized
+        );
         // Check if we have an existing channel
         if self.channels.contains_key(&channel_id) {
             eprintln!("Channel already exists");
@@ -433,7 +444,10 @@ impl SignalingDevice {
 
                     // Handle the initial message
                     if let Err(e) = channel.handle_routing_message(message, self) {
-                        eprintln!("Error handling initial message on channel {}: {:?}", channel_id, e);
+                        eprintln!(
+                            "Error handling initial message on channel {}: {:?}",
+                            channel_id, e
+                        );
                         return;
                     }
 
@@ -452,7 +466,10 @@ impl SignalingDevice {
                 }
                 Ok(false) => {
                     // Not an initial message and no channel exists - send error
-                    eprintln!("Received non-initial message for unknown channel: {}", channel_id);
+                    eprintln!(
+                        "Received non-initial message for unknown channel: {}",
+                        channel_id
+                    );
                     let error = ErrorInfo {
                         code: routing::error_codes::CHANNEL_NOT_FOUND.to_string(),
                         message: Some(format!("Channel {} not found", channel_id)),
@@ -460,7 +477,10 @@ impl SignalingDevice {
                     self.send_error(&channel_id, error);
                 }
                 Err(e) => {
-                    eprintln!("Failed to parse message for channel {}: {:?}", channel_id, e);
+                    eprintln!(
+                        "Failed to parse message for channel {}: {:?}",
+                        channel_id, e
+                    );
                 }
             }
         }

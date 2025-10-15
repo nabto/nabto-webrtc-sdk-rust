@@ -48,8 +48,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let private_key_file = args.private_key;
 
     // Read the private key from file
-    let private_key = fs::read_to_string(&private_key_file)
-        .map_err(|e| format!("Failed to read private key file '{}': {}", private_key_file, e))?;
+    let private_key = fs::read_to_string(&private_key_file).map_err(|e| {
+        format!(
+            "Failed to read private key file '{}': {}",
+            private_key_file, e
+        )
+    })?;
 
     println!("=== Nabto WebRTC Signaling Device ===");
     println!();
@@ -98,12 +102,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(async move {
         while let Some(event) = event_rx.recv().await {
             match event {
-                nabto_webrtc_sdk::DeviceEvent::NewChannel { channel, authorized } => {
+                nabto_webrtc_sdk::DeviceEvent::NewChannel {
+                    channel,
+                    authorized,
+                } => {
                     println!("📡 New channel received!");
                     println!("   Channel ID: {}", channel.channel_id());
                     println!("   Authorized: {}", authorized);
                 }
-                nabto_webrtc_sdk::DeviceEvent::StateChanged { old_state, new_state } => {
+                nabto_webrtc_sdk::DeviceEvent::StateChanged {
+                    old_state,
+                    new_state,
+                } => {
                     println!("🔄 State changed: {:?} -> {:?}", old_state, new_state);
                 }
             }
@@ -117,7 +127,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 4. Handle reconnection logic automatically
     // 5. Process incoming messages and channels
     println!("🔌 Starting Nabto WebRTC Signaling Device...");
-    println!("   Initial connection state: {:?}", device.connection_state());
+    println!(
+        "   Initial connection state: {:?}",
+        device.connection_state()
+    );
     println!();
 
     // Spawn the device run loop

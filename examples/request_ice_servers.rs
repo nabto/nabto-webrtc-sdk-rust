@@ -48,8 +48,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let private_key_file = args.private_key;
 
     // Read the private key from file
-    let private_key = fs::read_to_string(&private_key_file)
-        .map_err(|e| format!("Failed to read private key file '{}': {}", private_key_file, e))?;
+    let private_key = fs::read_to_string(&private_key_file).map_err(|e| {
+        format!(
+            "Failed to read private key file '{}': {}",
+            private_key_file, e
+        )
+    })?;
 
     println!("Product ID: {}", product_id);
     println!("Device ID: {}", device_id);
@@ -93,7 +97,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Requesting ICE servers...");
     match device.request_ice_servers().await {
         Ok(ice_servers) => {
-            println!("✓ Successfully retrieved {} ICE servers:", ice_servers.len());
+            println!(
+                "✓ Successfully retrieved {} ICE servers:",
+                ice_servers.len()
+            );
             println!();
             for (i, server) in ice_servers.iter().enumerate() {
                 println!("Server {}:", i + 1);
@@ -102,7 +109,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("  Username: {}", username);
                 }
                 if let Some(credential) = &server.credential {
-                    println!("  Credential: {}...", &credential[..credential.len().min(20)]);
+                    println!(
+                        "  Credential: {}...",
+                        &credential[..credential.len().min(20)]
+                    );
                 }
                 println!();
             }

@@ -28,17 +28,15 @@ async fn test_channel_creation_on_client_connect() {
     let (device, mut event_rx) = test.start_signaling_device();
 
     // Start and connect the device
-    device.wait_for_state( ConnectionState::Connected, Duration::from_secs(5))
+    device
+        .wait_for_state(ConnectionState::Connected, Duration::from_secs(5))
         .await
         .expect("Device did not reach Connected state");
 
     println!("Device connected");
 
     // Create a client
-    let client_id = test
-        .create_client()
-        .await
-        .expect("Failed to create client");
+    let client_id = test.create_client().await.expect("Failed to create client");
     println!("Created client: {}", client_id);
 
     // Connect the client to the device
@@ -62,7 +60,10 @@ async fn test_channel_creation_on_client_connect() {
         match tokio::time::timeout(Duration::from_millis(100), event_rx.recv()).await {
             Ok(Some(event)) => {
                 match event {
-                    DeviceEvent::NewChannel { channel, authorized } => {
+                    DeviceEvent::NewChannel {
+                        channel,
+                        authorized,
+                    } => {
                         println!(
                             "Received NewChannel event for channel {} (authorized: {})",
                             channel.channel_id(),
@@ -71,7 +72,10 @@ async fn test_channel_creation_on_client_connect() {
                         new_channel_received = true;
                         assert!(!authorized); // Client connects without authorization in basic test
                     }
-                    DeviceEvent::StateChanged { old_state, new_state } => {
+                    DeviceEvent::StateChanged {
+                        old_state,
+                        new_state,
+                    } => {
                         println!("Device state changed: {:?} -> {:?}", old_state, new_state);
                     }
                 }
@@ -106,7 +110,8 @@ async fn test_multiple_channel_creation() {
     let (device, mut event_rx) = test.start_signaling_device();
 
     // Start and connect the device
-    device.wait_for_state( ConnectionState::Connected, Duration::from_secs(5))
+    device
+        .wait_for_state(ConnectionState::Connected, Duration::from_secs(5))
         .await
         .expect("Device did not reach Connected state");
 
@@ -152,20 +157,21 @@ async fn test_multiple_channel_creation() {
 
     while start.elapsed() < timeout && channel_count < 2 {
         match tokio::time::timeout(Duration::from_millis(100), event_rx.recv()).await {
-            Ok(Some(event)) => {
-                match event {
-                    DeviceEvent::NewChannel { channel, authorized } => {
-                        println!(
-                            "Received NewChannel event for channel {} (authorized: {})",
-                            channel.channel_id(),
-                            authorized
-                        );
-                        channel_ids.push(channel.channel_id().to_string());
-                        channel_count += 1;
-                    }
-                    DeviceEvent::StateChanged { .. } => {}
+            Ok(Some(event)) => match event {
+                DeviceEvent::NewChannel {
+                    channel,
+                    authorized,
+                } => {
+                    println!(
+                        "Received NewChannel event for channel {} (authorized: {})",
+                        channel.channel_id(),
+                        authorized
+                    );
+                    channel_ids.push(channel.channel_id().to_string());
+                    channel_count += 1;
                 }
-            }
+                DeviceEvent::StateChanged { .. } => {}
+            },
             Ok(None) => break,
             Err(_) => continue,
         }
@@ -205,17 +211,15 @@ async fn test_non_initial_message_rejected() {
     let (device, mut event_rx) = test.start_signaling_device();
 
     // Start and connect the device
-    device.wait_for_state( ConnectionState::Connected, Duration::from_secs(5))
+    device
+        .wait_for_state(ConnectionState::Connected, Duration::from_secs(5))
         .await
         .expect("Device did not reach Connected state");
 
     println!("Device connected");
 
     // Create a client and connect
-    let client_id = test
-        .create_client()
-        .await
-        .expect("Failed to create client");
+    let client_id = test.create_client().await.expect("Failed to create client");
     test.connect_client(&client_id)
         .await
         .expect("Failed to connect client");
@@ -271,17 +275,15 @@ async fn test_channel_receives_messages() {
     let (device, mut event_rx) = test.start_signaling_device();
 
     // Start and connect the device
-    device.wait_for_state( ConnectionState::Connected, Duration::from_secs(5))
+    device
+        .wait_for_state(ConnectionState::Connected, Duration::from_secs(5))
         .await
         .expect("Device did not reach Connected state");
 
     println!("Device connected");
 
     // Create and connect a client
-    let client_id = test
-        .create_client()
-        .await
-        .expect("Failed to create client");
+    let client_id = test.create_client().await.expect("Failed to create client");
     test.connect_client(&client_id)
         .await
         .expect("Failed to connect client");
@@ -312,10 +314,7 @@ async fn test_channel_receives_messages() {
     assert!(new_channel_received, "Expected NewChannel event");
 
     // Send additional messages from client
-    let messages = vec![
-        "test message 1".to_string(),
-        "test message 2".to_string(),
-    ];
+    let messages = vec!["test message 1".to_string(), "test message 2".to_string()];
     test.client_send_messages(&client_id, messages.clone())
         .await
         .expect("Failed to send messages from client");

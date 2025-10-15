@@ -15,9 +15,12 @@ pub use signaling_device::{
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
-    fn test_basic() {
-        // Basic test placeholder
-        assert!(true);
+    fn test_lib_imports() {
+        // Verify that core types are accessible
+        let _: Option<Error> = None;
+        let _: Option<ConnectionState> = None;
     }
 }

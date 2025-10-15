@@ -41,10 +41,7 @@ async fn test_device_client_success() {
     println!("✓ Device started and connected");
 
     // Step 2: Connect a client
-    let client_id = test
-        .create_client()
-        .await
-        .expect("Failed to create client");
+    let client_id = test.create_client().await.expect("Failed to create client");
 
     test.connect_client(&client_id)
         .await
@@ -71,24 +68,28 @@ async fn test_device_client_success() {
 
     while start.elapsed() < timeout && !channel_found {
         match tokio::time::timeout(Duration::from_millis(100), event_rx.recv()).await {
-            Ok(Some(event)) => {
-                match event {
-                    DeviceEvent::NewChannel { channel, authorized } => {
-                        println!(
-                            "✓ Received NewChannel event for channel {} (authorized: {})",
-                            channel.channel_id(),
-                            authorized
-                        );
-                        channel_state = Some(channel.state());
-                        channel_found = true;
-                        println!("  Channel state: {:?}", channel.state());
-                    }
-                    DeviceEvent::StateChanged { old_state, new_state } => {
-                        println!("  Device state changed: {:?} -> {:?}", old_state, new_state);
-                    }
+            Ok(Some(event)) => match event {
+                DeviceEvent::NewChannel {
+                    channel,
+                    authorized,
+                } => {
+                    println!(
+                        "✓ Received NewChannel event for channel {} (authorized: {})",
+                        channel.channel_id(),
+                        authorized
+                    );
+                    channel_state = Some(channel.state());
+                    channel_found = true;
+                    println!("  Channel state: {:?}", channel.state());
                 }
-            }
-            Ok(None) => break, // Channel closed
+                DeviceEvent::StateChanged {
+                    old_state,
+                    new_state,
+                } => {
+                    println!("  Device state changed: {:?} -> {:?}", old_state, new_state);
+                }
+            },
+            Ok(None) => break,  // Channel closed
             Err(_) => continue, // Timeout, try again
         }
     }
@@ -147,10 +148,7 @@ async fn test_device_client_disconnect() {
     println!("✓ Device started and connected");
 
     // Step 2: Connect a client
-    let client_id = test
-        .create_client()
-        .await
-        .expect("Failed to create client");
+    let client_id = test.create_client().await.expect("Failed to create client");
 
     test.connect_client(&client_id)
         .await
@@ -172,7 +170,11 @@ async fn test_device_client_disconnect() {
     while channel.is_none() {
         match tokio::time::timeout_at(deadline, event_rx.recv()).await {
             Ok(Some(event)) => {
-                if let DeviceEvent::NewChannel { channel: ch, authorized } = event {
+                if let DeviceEvent::NewChannel {
+                    channel: ch,
+                    authorized,
+                } = event
+                {
                     println!(
                         "✓ Received NewChannel event for channel {} (authorized: {})",
                         ch.channel_id(),

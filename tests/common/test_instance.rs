@@ -1,7 +1,7 @@
 //! Test instance helper for integration tests
 
 use super::test_client::{DeviceTestOptions, TestClient};
-use nabto_webrtc_sdk::{DeviceEvent, SignalingDevice, SignalingDeviceOptions, ConnectionState};
+use nabto_webrtc_sdk::{ConnectionState, DeviceEvent, SignalingDevice, SignalingDeviceOptions};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Mutex as TokioMutex};
@@ -55,8 +55,7 @@ impl DeviceHandle {
             if start.elapsed() > timeout {
                 return Err(format!(
                     "Timeout waiting for state {:?}. Current state: {:?}",
-                    expected_state,
-                    current_state
+                    expected_state, current_state
                 )
                 .into());
             }
@@ -100,7 +99,10 @@ impl DeviceTestInstance {
             let token = access_token.clone();
             Box::pin(async move { Ok(token) })
                 as std::pin::Pin<
-                    Box<dyn std::future::Future<Output = Result<String, nabto_webrtc_sdk::Error>> + Send>,
+                    Box<
+                        dyn std::future::Future<Output = Result<String, nabto_webrtc_sdk::Error>>
+                            + Send,
+                    >,
                 >
         });
 
@@ -287,9 +289,7 @@ impl DeviceTestInstance {
 
     /// Drop device messages (for reliability testing)
     pub async fn drop_device_messages(&self) -> Result<(), Box<dyn std::error::Error>> {
-        self.test_client
-            .drop_device_messages(&self.test_id)
-            .await?;
+        self.test_client.drop_device_messages(&self.test_id).await?;
         Ok(())
     }
 

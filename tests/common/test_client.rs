@@ -1,5 +1,7 @@
 //! HTTP client for communicating with the integration test server
 
+#![allow(clippy::needless_borrows_for_generic_args)] // Test code clarity over micro-optimization
+
 use serde::{Deserialize, Serialize};
 
 const BASE_URL: &str = "http://localhost:13745";

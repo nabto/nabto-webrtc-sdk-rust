@@ -65,7 +65,7 @@ pub struct WebSocketConfig {
 impl Default for WebSocketConfig {
     fn default() -> Self {
         Self {
-            pong_timeout_ms: 2_000,   // 2 seconds
+            pong_timeout_ms: 2_000, // 2 seconds
         }
     }
 }
@@ -291,10 +291,7 @@ impl WebSocketConnection {
                     })
                     .await;
             }
-            RoutingMessage::Error {
-                channel_id,
-                error,
-            } => {
+            RoutingMessage::Error { channel_id, error } => {
                 let _ = self
                     .event_tx
                     .send(ConnectionEvent::Error {

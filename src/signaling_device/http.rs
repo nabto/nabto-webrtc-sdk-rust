@@ -96,7 +96,9 @@ impl HttpApi {
             .json(&request_body)
             .send()
             .await
-            .map_err(|e| Error::Connection(format!("Failed to send device connect request: {}", e)))?;
+            .map_err(|e| {
+                Error::Connection(format!("Failed to send device connect request: {}", e))
+            })?;
 
         self.handle_response(response).await
     }
@@ -141,10 +143,7 @@ impl HttpApi {
                 .map_err(|e| Error::Other(format!("Failed to parse response: {}", e)))
         } else {
             // Try to parse error response
-            let error_body = response
-                .json::<ErrorResponse>()
-                .await
-                .ok();
+            let error_body = response.json::<ErrorResponse>().await.ok();
 
             let error_message = error_body
                 .as_ref()
@@ -152,9 +151,18 @@ impl HttpApi {
                 .unwrap_or_else(|| format!("HTTP error: {}", status));
 
             match status.as_u16() {
-                400 => Err(Error::Configuration(format!("Bad request: {}", error_message))),
-                401 => Err(Error::Configuration(format!("Unauthorized: {}", error_message))),
-                403 => Err(Error::Configuration(format!("Forbidden: {}", error_message))),
+                400 => Err(Error::Configuration(format!(
+                    "Bad request: {}",
+                    error_message
+                ))),
+                401 => Err(Error::Configuration(format!(
+                    "Unauthorized: {}",
+                    error_message
+                ))),
+                403 => Err(Error::Configuration(format!(
+                    "Forbidden: {}",
+                    error_message
+                ))),
                 404 => {
                     if let Some(code) = error_body.and_then(|e| e.code) {
                         match code.as_str() {
@@ -170,9 +178,15 @@ impl HttpApi {
                         Err(Error::Other(format!("Not found: {}", error_message)))
                     }
                 }
-                429 => Err(Error::Other(format!("Too many requests: {}", error_message))),
+                429 => Err(Error::Other(format!(
+                    "Too many requests: {}",
+                    error_message
+                ))),
                 500..=599 => Err(Error::Other(format!("Server error: {}", error_message))),
-                _ => Err(Error::Other(format!("HTTP error {}: {}", status, error_message))),
+                _ => Err(Error::Other(format!(
+                    "HTTP error {}: {}",
+                    status, error_message
+                ))),
             }
         }
     }

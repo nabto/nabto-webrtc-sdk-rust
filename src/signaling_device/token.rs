@@ -114,8 +114,9 @@ impl DeviceTokenGenerator {
         header.typ = Some("JWT".to_string());
 
         // Create encoding key from PEM
-        let encoding_key = EncodingKey::from_ec_pem(self.private_key.as_bytes())
-            .map_err(|e| Error::Configuration(format!("Failed to parse private key for signing: {}", e)))?;
+        let encoding_key = EncodingKey::from_ec_pem(self.private_key.as_bytes()).map_err(|e| {
+            Error::Configuration(format!("Failed to parse private key for signing: {}", e))
+        })?;
 
         // Generate the JWT
         let token = encode(&header, &claims, &encoding_key)
@@ -184,6 +185,9 @@ kroaroSWQLA/A+6sCQRb8g+Ip4yhRANCAATc3dMAfNPk6dmWOLoYdOLwsuC6OQ4x
         assert!(key_id.is_ok(), "Key ID generation should succeed");
 
         let kid = key_id.unwrap();
-        assert_eq!(kid, "device:d253a3df618f08d76696ddc66fdc35de5d75ed12e1908503b1575e005e79a516");
+        assert_eq!(
+            kid,
+            "device:d253a3df618f08d76696ddc66fdc35de5d75ed12e1908503b1575e005e79a516"
+        );
     }
 }
