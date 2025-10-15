@@ -11,6 +11,7 @@ mod state;
 mod token;
 
 pub use channel::{SignalingChannel, SignalingChannelEventHandler};
+pub use connection::{ConnectionEvent, WebSocketConfig, WebSocketConnection, WebSocketHandle};
 pub use http::IceServer;
 pub use state::{ChannelState, ConnectionState};
 pub use token::DeviceTokenGenerator;
@@ -18,15 +19,13 @@ pub use token::DeviceTokenGenerator;
 use http::HttpApi;
 
 use crate::{Error, Result};
-use futures::StreamExt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, Mutex};
 use tokio::time::Instant;
-use tokio::net::TcpStream;
-use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::connect_async;
 
 /// Minimum time between a successful connection and reconnect counter reset (10 seconds)
 const RECONNECT_COUNTER_RESET_TIMEOUT: Duration = Duration::from_secs(10);
@@ -34,14 +33,6 @@ const RECONNECT_COUNTER_RESET_TIMEOUT: Duration = Duration::from_secs(10);
 /// Maximum reconnect wait time (60 seconds)
 const MAX_RECONNECT_WAIT_SECONDS: u32 = 60;
 
-/// Internal events from WebSocket monitoring task
-#[derive(Debug)]
-enum WebSocketEvent {
-    /// WebSocket connection was closed
-    Closed,
-    /// WebSocket connection encountered an error
-    Error(String),
-}
 
 /// Callback type for generating access tokens
 pub type TokenGenerator =
@@ -73,8 +64,9 @@ pub struct SignalingDevice {
     state: ConnectionState,
     new_channel_handler: Option<NewChannelHandler>,
 
-    // WebSocket monitoring
-    ws_event_rx: Option<mpsc::Receiver<WebSocketEvent>>,
+    // WebSocket connection
+    ws_handle: Option<WebSocketHandle>,
+    ws_event_rx: Option<mpsc::Receiver<ConnectionEvent>>,
 
     // Retry state
     reconnect_counter: u32,
@@ -101,6 +93,7 @@ impl SignalingDevice {
             options,
             state: ConnectionState::New,
             new_channel_handler: None,
+            ws_handle: None,
             ws_event_rx: None,
             reconnect_counter: 0,
             connected_at: None,
@@ -165,43 +158,18 @@ impl SignalingDevice {
             Error::WebSocket(format!("Failed to connect WebSocket: {}", e))
         })?;
 
-        // Step 3: Spawn a task to monitor the WebSocket connection
-        let (tx, rx) = mpsc::channel(32);
-        self.ws_event_rx = Some(rx);
+        // Step 3: Create WebSocketConnection and spawn it as a task
+        let config = WebSocketConfig::default();
+        let (connection, handle, event_rx) = WebSocketConnection::new(ws_stream, config);
+
+        self.ws_handle = Some(handle);
+        self.ws_event_rx = Some(event_rx);
 
         tokio::spawn(async move {
-            Self::monitor_websocket(ws_stream, tx).await;
+            connection.run().await;
         });
 
         Ok(())
-    }
-
-    /// Background task to monitor WebSocket connection
-    /// Sends events through the channel when connection closes or errors occur
-    async fn monitor_websocket(
-        mut ws_stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
-        tx: mpsc::Sender<WebSocketEvent>,
-    ) {
-        loop {
-            match ws_stream.next().await {
-                Some(Ok(_message)) => {
-                    // TODO: Handle incoming WebSocket messages
-                    // For now, we just keep the connection alive
-                }
-                Some(Err(e)) => {
-                    // WebSocket error occurred
-                    eprintln!("WebSocket error: {:?}", e);
-                    let _ = tx.send(WebSocketEvent::Error(e.to_string())).await;
-                    break;
-                }
-                None => {
-                    // WebSocket connection closed
-                    eprintln!("WebSocket connection closed");
-                    let _ = tx.send(WebSocketEvent::Closed).await;
-                    break;
-                }
-            }
-        }
     }
 
 
@@ -214,7 +182,11 @@ impl SignalingDevice {
         // Stop any retry loops
         *self.should_stop.lock().await = true;
 
-        // Close event receiver (WebSocket monitoring task will be dropped)
+        // Close WebSocket connection
+        if let Some(handle) = &self.ws_handle {
+            let _ = handle.close().await;
+        }
+        self.ws_handle = None;
         self.ws_event_rx = None;
 
         self.state = ConnectionState::Closed;
@@ -233,24 +205,42 @@ impl SignalingDevice {
     /// a PONG is not received timely after calling check_alive, then the
     /// websocket disconnects and a new signaling connection is made to the
     /// signaling service.
-    pub fn check_alive(&self) {
-        // TODO: Send PING message on WebSocket
-        // Implementation will be added later
+    pub async fn check_alive(&self) -> Result<()> {
+        if let Some(handle) = &self.ws_handle {
+            handle.send_ping().await.map_err(|e| Error::WebSocket(e))?;
+        }
+        Ok(())
     }
 
     /// Process any pending WebSocket events (for testing/polling)
     /// In a real application, this would be handled automatically in the background
     pub async fn process_events(&mut self) {
         if let Some(rx) = &mut self.ws_event_rx {
-            // Try to receive an event without blocking
-            if let Ok(event) = rx.try_recv() {
+            // Process all pending events without blocking
+            while let Ok(event) = rx.try_recv() {
                 match event {
-                    WebSocketEvent::Closed | WebSocketEvent::Error(_) => {
+                    ConnectionEvent::Open => {
+                        eprintln!("WebSocket connection opened");
+                    }
+                    ConnectionEvent::Closed | ConnectionEvent::ConnectionError(_) | ConnectionEvent::PingTimeout => {
                         eprintln!("WebSocket disconnected: {:?}", event);
                         // Transition to WaitRetry
                         if self.state == ConnectionState::Connected {
                             self.state = ConnectionState::WaitRetry;
                         }
+                    }
+                    ConnectionEvent::Message { channel_id, message, authorized } => {
+                        // TODO: Handle incoming messages
+                        eprintln!("Received message on channel {}: {:?} (authorized: {})", channel_id, message, authorized);
+                    }
+                    ConnectionEvent::Error { channel_id, code, message } => {
+                        eprintln!("Error on channel {}: {} - {:?}", channel_id, code, message);
+                    }
+                    ConnectionEvent::PeerConnected { channel_id } => {
+                        eprintln!("Peer connected on channel {}", channel_id);
+                    }
+                    ConnectionEvent::PeerOffline { channel_id } => {
+                        eprintln!("Peer offline on channel {}", channel_id);
                     }
                 }
             }
