@@ -24,9 +24,8 @@ use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::mpsc;
 use tokio::time::Instant;
 use tokio_tungstenite::connect_async;
 
@@ -91,7 +90,7 @@ pub struct SignalingDevice {
     // Retry state
     reconnect_counter: u32,
     connected_at: Option<Instant>,
-    should_stop: Arc<Mutex<bool>>,
+    should_stop: bool,
 }
 
 impl SignalingDevice {
@@ -123,55 +122,214 @@ impl SignalingDevice {
             channels: HashMap::new(),
             reconnect_counter: 0,
             connected_at: None,
-            should_stop: Arc::new(Mutex::new(false)),
+            should_stop: false,
         };
 
         (device, device_event_rx)
     }
 
-    /// Start the signaling device
-    /// This initiates the connection process. The method returns immediately
-    /// and connection happens asynchronously with automatic retries.
-    pub async fn start(&mut self) -> Result<()> {
+    /// Run the signaling device event loop
+    ///
+    /// This method runs continuously, handling connection, reconnection, and message processing.
+    /// It will only return when stop() is called or an unrecoverable error occurs.
+    ///
+    /// The user should spawn this on a tokio task:
+    /// ```no_run
+    /// # use nabto_webrtc_sdk::{SignalingDevice, SignalingDeviceOptions};
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// # let token_generator = Box::new(|| {
+    /// #     Box::pin(async { Ok("token".to_string()) })
+    /// #         as std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, nabto_webrtc_sdk::Error>> + Send>>
+    /// # });
+    /// # let options = SignalingDeviceOptions {
+    /// #     endpoint_url: None,
+    /// #     product_id: "wp-test".to_string(),
+    /// #     device_id: "wd-test".to_string(),
+    /// #     token_generator,
+    /// # };
+    /// let (mut device, event_rx) = SignalingDevice::new(options);
+    ///
+    /// // Spawn the device run loop
+    /// tokio::spawn(async move {
+    ///     if let Err(e) = device.run().await {
+    ///         eprintln!("Device error: {:?}", e);
+    ///     }
+    /// });
+    /// # }
+    /// ```
+    pub async fn run(&mut self) -> Result<()> {
         if self.state != ConnectionState::New {
             return Err(Error::Configuration(
-                "Start can only be called once".to_string(),
+                "Run can only be called once".to_string(),
             ));
         }
 
-        *self.should_stop.lock().await = false;
+        self.should_stop = false;
 
-        // Just kick off the first connection attempt
-        // The retry loop will continue in the background if needed
-        self.do_single_connect_attempt().await;
+        // Main event loop
+        loop {
+            if self.should_stop {
+                break;
+            }
+
+            // Connection/reconnection logic
+            match self.state {
+                ConnectionState::New | ConnectionState::WaitRetry => {
+                    // Calculate retry delay if we're in WaitRetry
+                    if self.state == ConnectionState::WaitRetry {
+                        let wait_seconds = self.calculate_reconnect_delay();
+                        eprintln!("Waiting {} seconds before reconnecting...", wait_seconds);
+
+                        tokio::select! {
+                            _ = tokio::time::sleep(Duration::from_secs(wait_seconds as u64)) => {},
+                            _ = async {
+                                loop {
+                                    if self.should_stop {
+                                        break;
+                                    }
+                                    tokio::time::sleep(Duration::from_millis(100)).await;
+                                }
+                            } => {
+                                if self.should_stop {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    // Attempt to connect
+                    self.set_state(ConnectionState::Connecting);
+
+                    match self.try_connect().await {
+                        Ok(()) => {
+                            self.set_state(ConnectionState::Connected);
+                            self.connected_at = Some(Instant::now());
+                            self.reconnect_counter = 0;
+                            eprintln!("Successfully connected to signaling service");
+                        }
+                        Err(e) => {
+                            eprintln!("Connection failed: {:?}", e);
+                            self.set_state(ConnectionState::WaitRetry);
+                            self.reconnect_counter += 1;
+                        }
+                    }
+                }
+                ConnectionState::Connected => {
+                    // Process WebSocket events
+                    if let Some(rx) = &mut self.ws_event_rx {
+                        tokio::select! {
+                            event = rx.recv() => {
+                                match event {
+                                    Some(event) => {
+                                        self.handle_connection_event(event).await;
+                                    }
+                                    None => {
+                                        // WebSocket event channel closed
+                                        eprintln!("WebSocket event channel closed");
+                                        self.transition_to_reconnect();
+                                    }
+                                }
+                            }
+                            _ = async {
+                                loop {
+                                    if self.should_stop {
+                                        break;
+                                    }
+                                    tokio::time::sleep(Duration::from_millis(100)).await;
+                                }
+                            } => {
+                                if self.should_stop {
+                                    break;
+                                }
+                            }
+                        }
+                    } else {
+                        // No event receiver, shouldn't happen
+                        eprintln!("No WebSocket event receiver in Connected state");
+                        break;
+                    }
+                }
+                ConnectionState::Connecting => {
+                    // Shouldn't stay in Connecting state during the loop
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                ConnectionState::Closed => {
+                    // Device is closed, exit loop
+                    break;
+                }
+                ConnectionState::Failed => {
+                    // Failed state, transition to retry
+                    self.set_state(ConnectionState::WaitRetry);
+                    self.reconnect_counter += 1;
+                }
+            }
+        }
 
         Ok(())
     }
 
-    /// Attempt a single connection (used by start())
-    async fn do_single_connect_attempt(&mut self) {
-        // Only connect from NEW or WAIT_RETRY states
-        if self.state != ConnectionState::New && self.state != ConnectionState::WaitRetry {
-            eprintln!("do_single_connect_attempt called in invalid state: {:?}", self.state);
-            return;
+    /// Calculate the reconnect delay based on the reconnect counter
+    fn calculate_reconnect_delay(&self) -> u32 {
+        // Exponential backoff: 2^counter seconds, capped at MAX_RECONNECT_WAIT_SECONDS
+        let delay = 2u32.pow(self.reconnect_counter);
+        delay.min(MAX_RECONNECT_WAIT_SECONDS)
+    }
+
+    /// Set the connection state and emit a StateChanged event
+    fn set_state(&mut self, new_state: ConnectionState) {
+        if self.state != new_state {
+            let old_state = self.state;
+            self.state = new_state;
+
+            // Emit StateChanged event
+            let event = DeviceEvent::StateChanged {
+                old_state,
+                new_state,
+            };
+            let _ = self.device_event_tx.try_send(event);
+        }
+    }
+
+    /// Transition to reconnect state (cleanup current connection)
+    fn transition_to_reconnect(&mut self) {
+        // Check if we should reset the reconnect counter
+        if let Some(connected_at) = self.connected_at {
+            if connected_at.elapsed() >= RECONNECT_COUNTER_RESET_TIMEOUT {
+                self.reconnect_counter = 0;
+            }
         }
 
-        self.state = ConnectionState::Connecting;
+        // Close current WebSocket
+        self.ws_handle = None;
+        self.ws_event_rx = None;
 
-        // Try to connect
-        match self.try_connect().await {
-            Ok(()) => {
-                // Successfully connected
-                self.state = ConnectionState::Connected;
-                self.connected_at = Some(Instant::now());
-                // Connection established
+        // Transition to WaitRetry
+        self.set_state(ConnectionState::WaitRetry);
+    }
+
+    /// Handle a single connection event
+    async fn handle_connection_event(&mut self, event: ConnectionEvent) {
+        match event {
+            ConnectionEvent::Open => {
+                eprintln!("WebSocket connection opened");
             }
-            Err(e) => {
-                // Connection failed, transition to WaitRetry
-                eprintln!("Connection failed: {:?}", e);
-                self.state = ConnectionState::WaitRetry;
-                // In a real implementation, we'd schedule a retry here
-                // For now, tests can check for WaitRetry state
+            ConnectionEvent::Closed | ConnectionEvent::ConnectionError(_) | ConnectionEvent::PingTimeout => {
+                eprintln!("WebSocket disconnected: {:?}", event);
+                self.transition_to_reconnect();
+            }
+            ConnectionEvent::Message { channel_id, message, authorized } => {
+                eprintln!("Received MESSAGE event for channel {}", channel_id);
+                self.handle_message(channel_id, message, authorized).await;
+            }
+            ConnectionEvent::Error { channel_id, code, message } => {
+                self.handle_channel_error(channel_id, code, message);
+            }
+            ConnectionEvent::PeerConnected { channel_id } => {
+                self.handle_peer_connected(channel_id);
+            }
+            ConnectionEvent::PeerOffline { channel_id } => {
+                self.handle_peer_offline(channel_id);
             }
         }
     }
@@ -201,24 +359,22 @@ impl SignalingDevice {
     }
 
 
-    /// Close the signaling device
-    pub async fn close(&mut self) -> Result<()> {
-        if self.state == ConnectionState::Closed {
-            return Ok(());
-        }
-
-        // Stop any retry loops
-        *self.should_stop.lock().await = true;
+    /// Stop the signaling device
+    ///
+    /// This signals the run() loop to stop. The caller should ensure the run() task
+    /// completes before dropping the device.
+    pub fn stop(&mut self) {
+        self.should_stop = true;
 
         // Close WebSocket connection
         if let Some(handle) = &self.ws_handle {
-            let _ = handle.close().await;
+            let handle_clone = handle.clone();
+            tokio::spawn(async move {
+                let _ = handle_clone.close().await;
+            });
         }
-        self.ws_handle = None;
-        self.ws_event_rx = None;
 
-        self.state = ConnectionState::Closed;
-        Ok(())
+        self.set_state(ConnectionState::Closed);
     }
 
     /// Request ICE servers from the signaling service
@@ -240,47 +396,12 @@ impl SignalingDevice {
         Ok(())
     }
 
-    /// Process any pending WebSocket events (for testing/polling)
-    /// In a real application, this would be handled automatically in the background
-    pub async fn process_events(&mut self) {
-        // Collect all pending events first to avoid borrow checker issues
-        let mut events = Vec::new();
-        if let Some(rx) = &mut self.ws_event_rx {
-            while let Ok(event) = rx.try_recv() {
-                events.push(event);
-            }
-        }
-
-        eprintln!("Processing {} events", events.len());
-
-        // Now process the events
-        for event in events {
-            match event {
-                ConnectionEvent::Open => {
-                    eprintln!("WebSocket connection opened");
-                }
-                ConnectionEvent::Closed | ConnectionEvent::ConnectionError(_) | ConnectionEvent::PingTimeout => {
-                    eprintln!("WebSocket disconnected: {:?}", event);
-                    // Transition to WaitRetry
-                    if self.state == ConnectionState::Connected {
-                        self.state = ConnectionState::WaitRetry;
-                    }
-                }
-                ConnectionEvent::Message { channel_id, message, authorized } => {
-                    eprintln!("Received MESSAGE event for channel {}", channel_id);
-                    self.handle_message(channel_id, message, authorized).await;
-                }
-                ConnectionEvent::Error { channel_id, code, message } => {
-                    self.handle_channel_error(channel_id, code, message);
-                }
-                ConnectionEvent::PeerConnected { channel_id } => {
-                    self.handle_peer_connected(channel_id);
-                }
-                ConnectionEvent::PeerOffline { channel_id } => {
-                    self.handle_peer_offline(channel_id);
-                }
-            }
-        }
+    /// Get the current connection state
+    ///
+    /// Note: This is a snapshot of the state. In a multi-threaded environment,
+    /// the state may change immediately after this call returns.
+    pub fn connection_state(&self) -> ConnectionState {
+        self.state
     }
 
     /// Handle incoming message on a channel
@@ -373,11 +494,6 @@ impl SignalingDevice {
         if let Some(channel) = self.channels.get_mut(&channel_id) {
             channel.handle_peer_offline();
         }
-    }
-
-    /// Get the current connection state
-    pub fn connection_state(&self) -> ConnectionState {
-        self.state
     }
 
     /// Internal method to perform device connect HTTP request

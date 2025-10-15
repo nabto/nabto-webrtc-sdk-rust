@@ -4,7 +4,7 @@ use super::test_client::{DeviceTestOptions, TestClient};
 use nabto_webrtc_sdk::{DeviceEvent, SignalingDevice, SignalingDeviceOptions, ConnectionState};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex as TokioMutex};
 
 /// Helper struct for managing a device test instance
 pub struct DeviceTestInstance {
@@ -13,8 +13,65 @@ pub struct DeviceTestInstance {
     pub endpoint_url: String,
     pub test_id: String,
     pub access_token: String,
-    pub observed_states: Arc<Mutex<Vec<ConnectionState>>>,
+    pub observed_states: Arc<std::sync::Mutex<Vec<ConnectionState>>>,
     test_client: TestClient,
+}
+
+/// Handle to a running SignalingDevice
+pub struct DeviceHandle {
+    state_rx: Arc<TokioMutex<tokio::sync::watch::Receiver<ConnectionState>>>,
+    stop_tx: Arc<TokioMutex<Option<tokio::sync::oneshot::Sender<()>>>>,
+    _task: tokio::task::JoinHandle<()>,
+}
+
+impl DeviceHandle {
+    /// Get the current connection state
+    pub async fn connection_state(&self) -> ConnectionState {
+        *self.state_rx.lock().await.borrow()
+    }
+
+    /// Stop the device
+    pub async fn stop(&self) {
+        if let Some(tx) = self.stop_tx.lock().await.take() {
+            let _ = tx.send(());
+        }
+    }
+
+    /// Wait for the device to reach a specific state
+    pub async fn wait_for_state(
+        &self,
+        expected_state: ConnectionState,
+        timeout: Duration,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let start = Instant::now();
+        let mut rx = self.state_rx.lock().await.clone();
+
+        loop {
+            let current_state = *rx.borrow_and_update();
+            if current_state == expected_state {
+                return Ok(());
+            }
+
+            if start.elapsed() > timeout {
+                return Err(format!(
+                    "Timeout waiting for state {:?}. Current state: {:?}",
+                    expected_state,
+                    current_state
+                )
+                .into());
+            }
+
+            // Wait for state change or timeout
+            tokio::select! {
+                _ = rx.changed() => {
+                    // State changed, loop to check if it matches
+                }
+                _ = tokio::time::sleep(Duration::from_millis(100)) => {
+                    // Periodic check
+                }
+            }
+        }
+    }
 }
 
 impl DeviceTestInstance {
@@ -53,6 +110,56 @@ impl DeviceTestInstance {
             device_id: self.device_id.clone(),
             token_generator,
         })
+    }
+
+    /// Create and start a SignalingDevice, returning a handle to it
+    /// The device will run in the background until stop() is called on the handle
+    pub fn start_signaling_device(&self) -> (DeviceHandle, mpsc::Receiver<DeviceEvent>) {
+        let (mut device, mut event_rx_from_device) = self.create_signaling_device();
+
+        // Create channels for state tracking and stop signal
+        let (state_tx, state_rx) = tokio::sync::watch::channel(device.connection_state());
+        let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel();
+
+        // Create a new event channel that we'll forward events to
+        let (event_tx, event_rx) = mpsc::channel(32);
+
+        // Spawn task that runs the device and monitors events
+        let task = tokio::spawn(async move {
+            // Spawn a task to forward events and update state
+            let event_tx_clone = event_tx.clone();
+            let state_tx_clone = state_tx.clone();
+            tokio::spawn(async move {
+                while let Some(event) = event_rx_from_device.recv().await {
+                    // Update state if it's a StateChanged event
+                    if let nabto_webrtc_sdk::DeviceEvent::StateChanged { new_state, .. } = &event {
+                        let _ = state_tx_clone.send(*new_state);
+                    }
+                    // Forward the event
+                    let _ = event_tx_clone.send(event).await;
+                }
+            });
+
+            // Run the device with stop signal handling
+            tokio::select! {
+                result = device.run() => {
+                    if let Err(e) = result {
+                        eprintln!("Device run() error: {:?}", e);
+                    }
+                }
+                _ = &mut stop_rx => {
+                    device.stop();
+                }
+            }
+        });
+
+        let handle = DeviceHandle {
+            state_rx: Arc::new(TokioMutex::new(state_rx)),
+            stop_tx: Arc::new(TokioMutex::new(Some(stop_tx))),
+            _task: task,
+        };
+
+        (handle, event_rx)
     }
 
     /// Record a connection state change (to be called manually from tests for now)

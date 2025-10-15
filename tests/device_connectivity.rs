@@ -24,23 +24,22 @@ async fn test_device_connect_ok() {
         .await
         .expect("Failed to create test instance");
 
-    let (mut device, _event_rx) = test.create_signaling_device();
+    let (device, _event_rx) = test.start_signaling_device();
 
     // Device should start in New state
-    assert_eq!(device.connection_state(), ConnectionState::New);
+    assert_eq!(device.connection_state().await, ConnectionState::New);
 
     // Start the device
-    device.start().await.expect("Failed to start device");
 
     // Wait for device to reach Connected state
-    test.wait_for_state(&device, ConnectionState::Connected, Duration::from_secs(5))
+    device.wait_for_state( ConnectionState::Connected, Duration::from_secs(5))
         .await
         .expect("Device did not reach Connected state");
 
-    assert_eq!(device.connection_state(), ConnectionState::Connected);
+    assert_eq!(device.connection_state().await, ConnectionState::Connected);
 
     // Cleanup
-    device.close().await.expect("Failed to close device");
+    device.stop().await; // Stop device("Failed to close device");
     test.destroy().await.expect("Failed to destroy test");
 }
 
@@ -54,19 +53,24 @@ async fn test_device_close() {
         .await
         .expect("Failed to create test instance");
 
-    let (mut device, _event_rx) = test.create_signaling_device();
+    let (device, _event_rx) = test.start_signaling_device();
 
     // Start and wait for connection
-    device.start().await.expect("Failed to start device");
-    test.wait_for_state(&device, ConnectionState::Connected, Duration::from_secs(5))
+    device.wait_for_state( ConnectionState::Connected, Duration::from_secs(5))
         .await
         .expect("Device did not reach Connected state");
 
     // Close the device
-    device.close().await.expect("Failed to close device");
+    device.stop().await;
+
+    // Wait for the device to reach Closed state
+    device
+        .wait_for_state(ConnectionState::Closed, Duration::from_secs(5))
+        .await
+        .expect("Device did not reach Closed state");
 
     // Verify state is Closed
-    assert_eq!(device.connection_state(), ConnectionState::Closed);
+    assert_eq!(device.connection_state().await, ConnectionState::Closed);
 
     // Cleanup
     test.destroy().await.expect("Failed to destroy test");
@@ -85,20 +89,19 @@ async fn test_device_http_error_retry() {
     .await
     .expect("Failed to create test instance");
 
-    let (mut device, _event_rx) = test.create_signaling_device();
+    let (device, _event_rx) = test.start_signaling_device();
 
     // Start the device
-    device.start().await.expect("Failed to start device");
 
     // The device should go to WaitRetry state due to HTTP failure
-    test.wait_for_state(&device, ConnectionState::WaitRetry, Duration::from_secs(5))
+    device.wait_for_state( ConnectionState::WaitRetry, Duration::from_secs(5))
         .await
         .expect("Device did not reach WaitRetry state");
 
-    assert_eq!(device.connection_state(), ConnectionState::WaitRetry);
+    assert_eq!(device.connection_state().await, ConnectionState::WaitRetry);
 
     // Cleanup
-    device.close().await.ok();
+    device.stop().await;
     test.destroy().await.expect("Failed to destroy test");
 }
 
@@ -115,20 +118,19 @@ async fn test_device_websocket_error_retry() {
     .await
     .expect("Failed to create test instance");
 
-    let (mut device, _event_rx) = test.create_signaling_device();
+    let (device, _event_rx) = test.start_signaling_device();
 
     // Start the device
-    device.start().await.expect("Failed to start device");
 
     // The device should go to WaitRetry state due to WebSocket failure
-    test.wait_for_state(&device, ConnectionState::WaitRetry, Duration::from_secs(5))
+    device.wait_for_state( ConnectionState::WaitRetry, Duration::from_secs(5))
         .await
         .expect("Device did not reach WaitRetry state");
 
-    assert_eq!(device.connection_state(), ConnectionState::WaitRetry);
+    assert_eq!(device.connection_state().await, ConnectionState::WaitRetry);
 
     // Cleanup
-    device.close().await.ok();
+    device.stop().await;
     test.destroy().await.expect("Failed to destroy test");
 }
 
@@ -142,11 +144,10 @@ async fn test_device_reconnects_after_disconnect() {
         .await
         .expect("Failed to create test instance");
 
-    let (mut device, _event_rx) = test.create_signaling_device();
+    let (device, _event_rx) = test.start_signaling_device();
 
     // Start and wait for initial connection
-    device.start().await.expect("Failed to start device");
-    test.wait_for_state(&device, ConnectionState::Connected, Duration::from_secs(5))
+    device.wait_for_state( ConnectionState::Connected, Duration::from_secs(5))
         .await
         .expect("Device did not reach Connected state initially");
 
@@ -164,17 +165,16 @@ async fn test_device_reconnects_after_disconnect() {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Process WebSocket events to detect the disconnection
-    device.process_events().await;
 
     // Device should now be in WaitRetry state
-    assert_eq!(device.connection_state(), ConnectionState::WaitRetry);
+    assert_eq!(device.connection_state().await, ConnectionState::WaitRetry);
     println!("Device is in WaitRetry state");
 
     // TODO: Automatic reconnection is not yet implemented
     // For now, we just verify the state transition works
 
     // Cleanup
-    device.close().await.expect("Failed to close device");
+    device.stop().await; // Stop device("Failed to close device");
     test.destroy().await.expect("Failed to destroy test");
 }
 
@@ -191,18 +191,17 @@ async fn test_device_http_extensibility() {
     .await
     .expect("Failed to create test instance");
 
-    let (mut device, _event_rx) = test.create_signaling_device();
+    let (device, _event_rx) = test.start_signaling_device();
 
     // Device should still connect successfully even with extra fields
-    device.start().await.expect("Failed to start device");
-    test.wait_for_state(&device, ConnectionState::Connected, Duration::from_secs(5))
+    device.wait_for_state( ConnectionState::Connected, Duration::from_secs(5))
         .await
         .expect("Device did not reach Connected state");
 
-    assert_eq!(device.connection_state(), ConnectionState::Connected);
+    assert_eq!(device.connection_state().await, ConnectionState::Connected);
 
     // Cleanup
-    device.close().await.expect("Failed to close device");
+    device.stop().await; // Stop device("Failed to close device");
     test.destroy().await.expect("Failed to destroy test");
 }
 
@@ -216,11 +215,10 @@ async fn test_device_ws_unknown_message_type() {
         .await
         .expect("Failed to create test instance");
 
-    let (mut device, _event_rx) = test.create_signaling_device();
+    let (device, _event_rx) = test.start_signaling_device();
 
     // Start and connect
-    device.start().await.expect("Failed to start device");
-    test.wait_for_state(&device, ConnectionState::Connected, Duration::from_secs(5))
+    device.wait_for_state( ConnectionState::Connected, Duration::from_secs(5))
         .await
         .expect("Device did not reach Connected state");
 
@@ -233,9 +231,9 @@ async fn test_device_ws_unknown_message_type() {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Device should still be connected (ignored the unknown message)
-    assert_eq!(device.connection_state(), ConnectionState::Connected);
+    assert_eq!(device.connection_state().await, ConnectionState::Connected);
 
     // Cleanup
-    device.close().await.expect("Failed to close device");
+    device.stop().await; // Stop device("Failed to close device");
     test.destroy().await.expect("Failed to destroy test");
 }

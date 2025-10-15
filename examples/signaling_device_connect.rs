@@ -100,7 +100,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             match event {
                 nabto_webrtc_sdk::DeviceEvent::NewChannel { channel, authorized } => {
                     println!("📡 New channel received!");
-                    println!("   Channel ID: {:?}", channel);
+                    println!("   Channel ID: {}", channel.channel_id());
                     println!("   Authorized: {}", authorized);
                 }
                 nabto_webrtc_sdk::DeviceEvent::StateChanged { old_state, new_state } => {
@@ -110,37 +110,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // Start the device - this will:
+    // Run the device - this will:
     // 1. Make device connect HTTP request
     // 2. Get signaling URL
     // 3. Open WebSocket connection
-    // 4. Handle reconnection logic
-    println!("🔌 Connecting to Nabto WebRTC Signaling Service...");
-    println!("   Connection state: {:?}", device.connection_state());
+    // 4. Handle reconnection logic automatically
+    // 5. Process incoming messages and channels
+    println!("🔌 Starting Nabto WebRTC Signaling Device...");
+    println!("   Initial connection state: {:?}", device.connection_state());
+    println!();
 
-    match device.start().await {
-        Ok(_) => {
-            println!("✓ Connected successfully!");
-            println!("   Connection state: {:?}", device.connection_state());
-            println!();
-            println!("Device is now ready to accept WebRTC signaling channels.");
-            println!();
-
-            // TODO: The device would now:
-            // - Listen for new signaling channels from clients
-            // - Handle WebRTC negotiation messages
-            // - Manage multiple concurrent connections
-            // - Automatically reconnect if connection drops
-
-            println!("Note: WebSocket connection, channel handling, and message");
-            println!("      processing will be implemented in future updates.");
-        }
-        Err(e) => {
-            eprintln!("✗ Failed to connect: {:?}", e);
-            println!("   Connection state: {:?}", device.connection_state());
+    // Spawn the device run loop
+    let device_task = tokio::spawn(async move {
+        if let Err(e) = device.run().await {
+            eprintln!("✗ Device error: {:?}", e);
             process::exit(1);
         }
-    }
+    });
+
+    println!("✓ Device is running!");
+    println!();
+    println!("The device will now:");
+    println!("  - Connect to the signaling service");
+    println!("  - Listen for new signaling channels from clients");
+    println!("  - Handle WebRTC negotiation messages");
+    println!("  - Manage multiple concurrent connections");
+    println!("  - Automatically reconnect if connection drops");
+    println!();
+    println!("Press Ctrl+C to stop...");
+    println!();
+
+    // Wait for the device task (or until interrupted)
+    device_task.await?;
 
     Ok(())
 }

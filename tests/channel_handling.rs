@@ -25,11 +25,10 @@ async fn test_channel_creation_on_client_connect() {
         .await
         .expect("Failed to create test instance");
 
-    let (mut device, mut event_rx) = test.create_signaling_device();
+    let (device, mut event_rx) = test.start_signaling_device();
 
     // Start and connect the device
-    device.start().await.expect("Failed to start device");
-    test.wait_for_state(&device, ConnectionState::Connected, Duration::from_secs(5))
+    device.wait_for_state( ConnectionState::Connected, Duration::from_secs(5))
         .await
         .expect("Device did not reach Connected state");
 
@@ -48,11 +47,16 @@ async fn test_channel_creation_on_client_connect() {
         .expect("Failed to connect client");
     println!("Client connected");
 
+    // Send a message from client to device to trigger channel creation
+    test.client_send_messages(&client_id, vec!["test message".to_string()])
+        .await
+        .expect("Failed to send message from client");
+    println!("Client sent message to device");
+
     // Give time for WebSocket messages to arrive
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Process events
-    device.process_events().await;
 
     // Check for NewChannel event
     let mut new_channel_received = false;
@@ -82,7 +86,7 @@ async fn test_channel_creation_on_client_connect() {
     test.disconnect_client(&client_id)
         .await
         .expect("Failed to disconnect client");
-    device.close().await.expect("Failed to close device");
+    device.stop().await; // Stop device("Failed to close device");
     test.destroy().await.expect("Failed to destroy test");
 }
 
@@ -95,11 +99,10 @@ async fn test_multiple_channel_creation() {
         .await
         .expect("Failed to create test instance");
 
-    let (mut device, mut event_rx) = test.create_signaling_device();
+    let (device, mut event_rx) = test.start_signaling_device();
 
     // Start and connect the device
-    device.start().await.expect("Failed to start device");
-    test.wait_for_state(&device, ConnectionState::Connected, Duration::from_secs(5))
+    device.wait_for_state( ConnectionState::Connected, Duration::from_secs(5))
         .await
         .expect("Device did not reach Connected state");
 
@@ -115,6 +118,12 @@ async fn test_multiple_channel_creation() {
         .expect("Failed to connect first client");
     println!("First client connected: {}", client1_id);
 
+    // Send a message from first client to trigger channel creation
+    test.client_send_messages(&client1_id, vec!["test message 1".to_string()])
+        .await
+        .expect("Failed to send message from first client");
+    println!("First client sent message to device");
+
     // Create second client
     let client2_id = test
         .create_client()
@@ -125,11 +134,16 @@ async fn test_multiple_channel_creation() {
         .expect("Failed to connect second client");
     println!("Second client connected: {}", client2_id);
 
+    // Send a message from second client to trigger channel creation
+    test.client_send_messages(&client2_id, vec!["test message 2".to_string()])
+        .await
+        .expect("Failed to send message from second client");
+    println!("Second client sent message to device");
+
     // Give time for WebSocket messages to arrive
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Process events
-    device.process_events().await;
 
     // Check for NewChannel events
     let mut channel_count = 0;
@@ -168,7 +182,7 @@ async fn test_multiple_channel_creation() {
     test.disconnect_client(&client2_id)
         .await
         .expect("Failed to disconnect second client");
-    device.close().await.expect("Failed to close device");
+    device.stop().await; // Stop device("Failed to close device");
     test.destroy().await.expect("Failed to destroy test");
 }
 
@@ -181,11 +195,10 @@ async fn test_non_initial_message_rejected() {
         .await
         .expect("Failed to create test instance");
 
-    let (mut device, mut event_rx) = test.create_signaling_device();
+    let (device, mut event_rx) = test.start_signaling_device();
 
     // Start and connect the device
-    device.start().await.expect("Failed to start device");
-    test.wait_for_state(&device, ConnectionState::Connected, Duration::from_secs(5))
+    device.wait_for_state( ConnectionState::Connected, Duration::from_secs(5))
         .await
         .expect("Device did not reach Connected state");
 
@@ -200,9 +213,13 @@ async fn test_non_initial_message_rejected() {
         .await
         .expect("Failed to connect client");
 
+    // Send a message from client to device to trigger channel creation
+    test.client_send_messages(&client_id, vec!["test message".to_string()])
+        .await
+        .expect("Failed to send message from client");
+
     // Give time for initial connection
     tokio::time::sleep(Duration::from_millis(500)).await;
-    device.process_events().await;
 
     // Consume the NewChannel event
     while let Ok(_) = event_rx.try_recv() {}
@@ -214,15 +231,14 @@ async fn test_non_initial_message_rejected() {
 
     // Give time for disconnection to propagate
     tokio::time::sleep(Duration::from_millis(500)).await;
-    device.process_events().await;
 
     // Try to send a message to the now-closed channel
     // This should be handled gracefully (no crash)
     // The device should still be in Connected state
-    assert_eq!(device.connection_state(), ConnectionState::Connected);
+    assert_eq!(device.connection_state().await, ConnectionState::Connected);
 
     // Cleanup
-    device.close().await.expect("Failed to close device");
+    device.stop().await; // Stop device("Failed to close device");
     test.destroy().await.expect("Failed to destroy test");
 }
 
@@ -235,11 +251,10 @@ async fn test_channel_receives_messages() {
         .await
         .expect("Failed to create test instance");
 
-    let (mut device, mut event_rx) = test.create_signaling_device();
+    let (device, mut event_rx) = test.start_signaling_device();
 
     // Start and connect the device
-    device.start().await.expect("Failed to start device");
-    test.wait_for_state(&device, ConnectionState::Connected, Duration::from_secs(5))
+    device.wait_for_state( ConnectionState::Connected, Duration::from_secs(5))
         .await
         .expect("Device did not reach Connected state");
 
@@ -255,9 +270,14 @@ async fn test_channel_receives_messages() {
         .expect("Failed to connect client");
     println!("Client connected: {}", client_id);
 
+    // Send initial message from client to device to trigger channel creation
+    test.client_send_messages(&client_id, vec!["initial message".to_string()])
+        .await
+        .expect("Failed to send initial message from client");
+    println!("Client sent initial message to device");
+
     // Give time for connection and initial message
     tokio::time::sleep(Duration::from_millis(500)).await;
-    device.process_events().await;
 
     // Verify NewChannel event was received
     let mut new_channel_received = false;
@@ -281,17 +301,16 @@ async fn test_channel_receives_messages() {
 
     // Give time for messages to arrive
     tokio::time::sleep(Duration::from_millis(500)).await;
-    device.process_events().await;
 
     // At this point, the channel should have processed the messages
     // The messages go through the reliability layer and are queued in the channel
     // For now, we just verify the device is still connected
-    assert_eq!(device.connection_state(), ConnectionState::Connected);
+    assert_eq!(device.connection_state().await, ConnectionState::Connected);
 
     // Cleanup
     test.disconnect_client(&client_id)
         .await
         .expect("Failed to disconnect client");
-    device.close().await.expect("Failed to close device");
+    device.stop().await; // Stop device("Failed to close device");
     test.destroy().await.expect("Failed to destroy test");
 }
