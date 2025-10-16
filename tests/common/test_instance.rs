@@ -150,7 +150,7 @@ impl DeviceTestInstance {
                     }
                 }
                 _ = &mut stop_rx => {
-                    device.stop();
+                    device.stop().await;
                 }
             }
         });
