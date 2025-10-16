@@ -19,16 +19,216 @@
 
 use anyhow::Result;
 use clap::Parser;
-use nabto_webrtc_sdk::device::{DeviceTokenGenerator, SignalingDevice, SignalingDeviceOptions};
+use nabto_webrtc_sdk::device::{ErrorInfo, SignalingChannel, SignalingDevice, SignalingDeviceOptions, SignalingService, DeviceTokenGenerator};
+use nabto_webrtc_sdk::util::{DeviceMessageTransport, DeviceMessageTransportOptions, DeviceTransportEvent, SecurityMode, WebrtcSignalingMessage};
+use serde_json::Value as JsonValue;
 use std::fs;
 use std::future::Future;
 use std::pin::Pin;
 use std::process;
+use std::sync::Arc;
 use tokio::net::UdpSocket;
 use webrtc::api::interceptor_registry::register_default_interceptors;
-use webrtc::api::media_engine::MediaEngine;
-use webrtc::api::APIBuilder;
+use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_VP8};
+use webrtc::api::{APIBuilder, API};
+use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::interceptor::registry::Registry;
+use webrtc::peer_connection::configuration::RTCConfiguration;
+use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
+use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
+use webrtc::peer_connection::RTCPeerConnection;
+use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
+use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
+use webrtc::track::track_local::{TrackLocal, TrackLocalWriter};
+
+// Note: This is a workaround. In production, we should pass the actual SignalingDevice
+// as the service so the DeviceMessageTransport can send messages back.
+// For now, we're using a dummy implementation since the messages aren't being sent back yet anyway.
+
+// Dummy SignalingService implementation for now
+// TODO: Replace with actual device reference
+struct DummyService;
+
+impl SignalingService for DummyService {
+    fn send_routing_message(&self, _channel_id: &str, _message: JsonValue) {
+        // TODO: Implement - would send message through SignalingDevice
+    }
+
+    fn send_error(&self, _channel_id: &str, _error: ErrorInfo) {
+        // TODO: Implement - would send error through SignalingDevice
+    }
+
+    fn close_channel(&mut self, _channel_id: &str) {
+        // TODO: Implement - would notify SignalingDevice to close channel
+    }
+}
+
+/// Handles a single WebRTC connection with signaling
+struct RtcConnectionHandler {
+    channel: SignalingChannel,
+    api: Arc<API>,
+    video_track: Arc<TrackLocalStaticRTP>,
+    peer_connection: Option<Arc<RTCPeerConnection>>,
+}
+
+impl RtcConnectionHandler {
+    /// Create a new RTC connection handler
+    fn new(
+        channel: SignalingChannel,
+        api: Arc<API>,
+        video_track: Arc<TrackLocalStaticRTP>,
+    ) -> Self {
+        let channel_id = channel.channel_id();
+        println!("[{}] Creating RTC connection handler", channel_id);
+
+        Self {
+            channel,
+            api,
+            video_track,
+            peer_connection: None,
+        }
+    }
+
+    /// Create the peer connection with ICE servers
+    async fn create_peer_connection(&mut self, ice_servers: Option<Vec<nabto_webrtc_sdk::util::IceServer>>) -> Result<()> {
+        let channel_id = self.channel.channel_id();
+
+        // Build ICE server configuration
+        let mut rtc_ice_servers = vec![
+            RTCIceServer {
+                urls: vec!["stun:stun.l.google.com:19302".to_owned()],
+                ..Default::default()
+            }
+        ];
+
+        // Add ICE servers from the signaling service if provided
+        if let Some(servers) = ice_servers {
+            for server in servers {
+                rtc_ice_servers.push(RTCIceServer {
+                    urls: server.urls,
+                    username: server.username.unwrap_or_default(),
+                    credential: server.credential.unwrap_or_default(),
+                    ..Default::default()
+                });
+            }
+        }
+
+        let config = RTCConfiguration {
+            ice_servers: rtc_ice_servers,
+            ..Default::default()
+        };
+
+        let peer_connection = Arc::new(self.api.new_peer_connection(config).await?);
+        println!("[{}] Created peer connection", channel_id);
+
+        // Add video track to peer connection
+        let _rtp_sender = peer_connection
+            .add_track(Arc::clone(&self.video_track) as Arc<dyn TrackLocal + Send + Sync>)
+            .await?;
+        println!("[{}] Added video track to peer connection", channel_id);
+
+        // Set up peer connection state change handler
+        let channel_id_for_state = channel_id.to_string();
+        peer_connection.on_peer_connection_state_change(Box::new(move |state: RTCPeerConnectionState| {
+            println!("[{}] Peer connection state changed: {}", channel_id_for_state, state);
+            Box::pin(async {})
+        }));
+
+        self.peer_connection = Some(peer_connection);
+        Ok(())
+    }
+
+    /// Run the connection handler
+    async fn run<S: SignalingService + Send + 'static>(
+        mut self,
+        _service: Arc<tokio::sync::Mutex<S>>,
+        shared_secret: Option<String>,
+    ) -> Result<()> {
+        let channel_id = self.channel.channel_id().to_string();
+
+        // Create message transport with security mode
+        let security_mode = if let Some(secret) = shared_secret {
+            SecurityMode::SharedSecret {
+                callback: Arc::new(move |_key_id| Ok(secret.clone())),
+            }
+        } else {
+            SecurityMode::None
+        };
+
+        let transport_options = DeviceMessageTransportOptions { security_mode };
+        let transport = DeviceMessageTransport::new(self.channel.clone(), transport_options);
+
+        let mut event_rx = transport
+            .take_event_receiver()
+            .ok_or_else(|| anyhow::anyhow!("Failed to get event receiver"))?;
+
+        println!("[{}] Connection handler running", channel_id);
+
+        // Handle transport events
+        while let Some(event) = event_rx.recv().await {
+            match event {
+                DeviceTransportEvent::SetupDone(ice_servers) => {
+                    println!("[{}] Setup completed, ICE servers: {:?}", channel_id, ice_servers);
+
+                    // Create peer connection now that we have ICE servers
+                    self.create_peer_connection(ice_servers).await?;
+                    println!("[{}] Peer connection ready", channel_id);
+                }
+                DeviceTransportEvent::WebrtcSignalingMessage(msg) => {
+                    println!("[{}] Received WebRTC signaling message", channel_id);
+                    self.handle_webrtc_message(msg).await?;
+                }
+                DeviceTransportEvent::Error(err) => {
+                    eprintln!("[{}] Transport error: {}", channel_id, err);
+                    return Err(anyhow::anyhow!("Transport error: {}", err));
+                }
+            }
+        }
+
+        println!("[{}] Connection handler stopped", channel_id);
+        Ok(())
+    }
+
+    /// Handle WebRTC signaling messages (SDP offer/answer, ICE candidates)
+    async fn handle_webrtc_message(
+        &mut self,
+        msg: WebrtcSignalingMessage,
+    ) -> Result<()> {
+        let channel_id = self.channel.channel_id();
+
+        // Check if peer connection is ready
+        let peer_connection = self.peer_connection.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Peer connection not yet created"))?;
+
+        match msg {
+            WebrtcSignalingMessage::Description { description } => {
+                println!("[{}] Received SDP description: {:?}", channel_id, description.desc_type);
+
+                // Set remote description (client's offer)
+                let remote_desc = RTCSessionDescription::offer(description.sdp)?;
+                peer_connection.set_remote_description(remote_desc).await?;
+
+                // Create answer
+                let answer = peer_connection.create_answer(None).await?;
+
+                // Set local description
+                peer_connection.set_local_description(answer.clone()).await?;
+
+                println!("[{}] Created and set SDP answer", channel_id);
+
+                // TODO: Send answer back through transport
+                println!("[{}] TODO: Send SDP answer to client", channel_id);
+            }
+            WebrtcSignalingMessage::Candidate { candidate } => {
+                println!("[{}] Received ICE candidate: {:?}", channel_id, candidate.candidate);
+                // TODO: Add ICE candidate to peer connection
+                println!("[{}] TODO: Add ICE candidate to peer connection", channel_id);
+            }
+        }
+
+        Ok(())
+    }
+}
 
 /// RTP to WebRTC forwarding using Nabto signaling
 #[derive(Parser, Debug)]
@@ -102,12 +302,24 @@ async fn main() -> Result<()> {
     let mut registry = Registry::new();
     registry = register_default_interceptors(registry, &mut media_engine)?;
 
-    let _api = APIBuilder::new()
+    let api = Arc::new(APIBuilder::new()
         .with_media_engine(media_engine)
         .with_interceptor_registry(registry)
-        .build();
+        .build());
 
     println!("WebRTC API initialized");
+
+    // Create shared video track for VP8
+    let video_track = Arc::new(TrackLocalStaticRTP::new(
+        RTCRtpCodecCapability {
+            mime_type: MIME_TYPE_VP8.to_owned(),
+            ..Default::default()
+        },
+        "video".to_owned(),
+        "webrtc-rs".to_owned(),
+    ));
+
+    println!("Created VP8 video track");
     println!();
 
     // Clone values for use in closure
@@ -149,6 +361,8 @@ async fn main() -> Result<()> {
 
     // Spawn a task to handle device events
     let shared_secret_for_task = shared_secret.clone();
+    let api_for_task = api.clone();
+    let video_track_for_task = Arc::clone(&video_track);
     tokio::spawn(async move {
         while let Some(event) = event_rx.recv().await {
             match event {
@@ -174,9 +388,23 @@ async fn main() -> Result<()> {
                     }
 
                     println!();
-                    println!("TODO: Handle WebRTC negotiation for this channel");
-                    // TODO: Create peer connection and handle SDP exchange
-                    // TODO: Validate JWT if shared secret is configured
+
+                    // Create and spawn RTC connection handler
+                    let api_clone = api_for_task.clone();
+                    let video_track_clone = Arc::clone(&video_track_for_task);
+                    let shared_secret_clone = shared_secret_for_task.clone();
+
+                    tokio::spawn(async move {
+                        let handler = RtcConnectionHandler::new(channel, api_clone, video_track_clone);
+                        println!("RTC connection handler created");
+
+                        // TODO: Need to pass SignalingService to handler.run()
+                        // For now, run with dummy service
+                        let service = Arc::new(tokio::sync::Mutex::new(DummyService));
+                        if let Err(e) = handler.run(service, shared_secret_clone).await {
+                            eprintln!("Connection handler error: {}", e);
+                        }
+                    });
                 }
                 nabto_webrtc_sdk::device::DeviceEvent::StateChanged {
                     old_state,
@@ -194,13 +422,16 @@ async fn main() -> Result<()> {
     println!("UDP listener ready on 0.0.0.0:{}", rtp_port);
     println!();
 
+    let video_track_for_rtp = Arc::clone(&video_track);
     tokio::spawn(async move {
         let mut buf = vec![0u8; 1500];
         loop {
             match udp_socket.recv_from(&mut buf).await {
                 Ok((n, _addr)) => {
-                    // TODO: Forward RTP packet to WebRTC track
-                    println!("Received RTP packet: {} bytes", n);
+                    // Forward RTP packet to all connected WebRTC peers
+                    if let Err(e) = video_track_for_rtp.write(&buf[..n]).await {
+                        eprintln!("Error writing RTP packet to track: {}", e);
+                    }
                 }
                 Err(e) => {
                     eprintln!("Error receiving RTP packet: {}", e);

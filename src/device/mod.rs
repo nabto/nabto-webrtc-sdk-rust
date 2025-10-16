@@ -15,11 +15,12 @@ mod token;
 pub use channel::{SignalingChannel, SignalingChannelEventHandler, SignalingService};
 pub use connection::{ConnectionEvent, WebSocketConfig, WebSocketConnection, WebSocketHandle};
 pub use http::IceServer;
+pub use routing::ErrorInfo; // Re-export ErrorInfo for use with SignalingService
 pub use state::{ChannelState, ConnectionState};
 pub use token::DeviceTokenGenerator;
 
 use http::HttpApi;
-use routing::{ErrorInfo, RoutingMessage};
+use routing::RoutingMessage;
 
 use crate::{Error, Result};
 use serde_json::Value as JsonValue;
