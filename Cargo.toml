@@ -27,6 +27,8 @@ base64 = "0.21"
 [dev-dependencies]
 tokio-test = "0.4"
 clap = { version = "4.5", features = ["derive"] }
+webrtc = "0.11"
+anyhow = "1.0"
 
 [profile.release-size]
 inherits = "release"
