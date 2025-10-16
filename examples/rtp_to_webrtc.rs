@@ -54,6 +54,10 @@ struct Args {
     /// UDP port to listen for RTP packets (default: 5004)
     #[arg(short = 'r', long, value_name = "PORT", default_value = "5004")]
     rtp_port: u16,
+
+    /// Optional shared secret for client authentication
+    #[arg(short = 's', long, value_name = "SECRET")]
+    shared_secret: Option<String>,
 }
 
 #[tokio::main]
@@ -65,6 +69,7 @@ async fn main() -> Result<()> {
     let device_id = args.device_id;
     let private_key_file = args.private_key;
     let rtp_port = args.rtp_port;
+    let shared_secret = args.shared_secret;
 
     // Read the private key from file
     let private_key = fs::read_to_string(&private_key_file).map_err(|e| {
@@ -83,6 +88,9 @@ async fn main() -> Result<()> {
     println!("RTP listen port: {}", rtp_port);
     if let Some(ref endpoint) = args.endpoint {
         println!("Endpoint: {}", endpoint);
+    }
+    if let Some(ref secret) = shared_secret {
+        println!("Shared secret: {}", secret);
     }
     println!();
 
@@ -136,6 +144,7 @@ async fn main() -> Result<()> {
     println!();
 
     // Spawn a task to handle device events
+    let shared_secret_for_task = shared_secret.clone();
     tokio::spawn(async move {
         while let Some(event) = event_rx.recv().await {
             match event {
@@ -146,6 +155,14 @@ async fn main() -> Result<()> {
                     println!("New signaling channel received!");
                     println!("  Channel ID: {}", channel.channel_id());
                     println!("  Authorized: {}", authorized);
+
+                    // If shared secret is configured, check authorization
+                    if shared_secret_for_task.is_some() && !authorized {
+                        println!("  Rejecting unauthorized connection (shared secret required)");
+                        println!();
+                        continue;
+                    }
+
                     println!();
                     println!("TODO: Handle WebRTC negotiation for this channel");
                     // TODO: Create peer connection and handle SDP exchange
