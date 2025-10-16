@@ -128,6 +128,10 @@ async fn main() -> Result<()> {
         }) as Pin<Box<dyn Future<Output = Result<String, nabto_webrtc_sdk::Error>> + Send>>
     });
 
+    // Clone for later use in URL printing
+    let product_id_for_url = product_id.clone();
+    let device_id_for_url = device_id.clone();
+
     // Create signaling device options
     let options = SignalingDeviceOptions {
         endpoint_url: args.endpoint,
@@ -212,10 +216,22 @@ async fn main() -> Result<()> {
 
     println!("Device is running!");
     println!();
+
+    // Show video stream link if all required parameters are available
+    if let Some(ref secret) = shared_secret {
+        println!("Video Stream Link:");
+        println!("  https://nabto.github.io/nabto-webrtc-sdk-js?mode=client&productId={}&deviceId={}&sharedSecret={}",
+                 product_id_for_url, device_id_for_url, secret);
+        println!();
+    } else {
+        println!("Video Stream Link: (incomplete - missing sharedSecret)");
+        println!();
+    }
+
     println!("Waiting for client connections...");
     println!();
     println!("You can now:");
-    println!("  1. Connect a WebRTC client using Nabto signaling");
+    println!("  1. Open the video stream link above in a web browser");
     println!("  2. Send RTP video stream to localhost:{}", rtp_port);
     println!();
     println!("Example GStreamer command:");
