@@ -309,6 +309,7 @@ mod tests {
     use super::*;
     use crate::device::SignalingChannel;
 
+    #[allow(dead_code)] // Used in tests
     struct MockService;
 
     impl SignalingService for MockService {

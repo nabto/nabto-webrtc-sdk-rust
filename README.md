@@ -102,6 +102,49 @@ for server in ice_servers {
 }
 ```
 
+## Development
+
+### Running CI Checks Locally
+
+Before pushing code, you can run the same checks that CI runs to catch issues early:
+
+#### Shell script (recommended for pre-push):
+```bash
+./ci-check.sh                # Run all checks
+./ci-check.sh --with-release # Include release build (slower)
+```
+
+#### Cargo aliases (recommended for quick iteration):
+```bash
+cargo quick-check      # Quick checks (fmt, clippy, test)
+cargo fmt-check        # Check formatting
+cargo clippy-ci        # Run clippy with CI settings
+cargo build-all        # Build everything
+cargo integration-test # Run integration tests
+```
+
+### Integration Tests
+
+Integration tests require the integration test server:
+
+1. Clone the JS SDK (done automatically in CI):
+   ```bash
+   git clone https://github.com/nabto/nabto-webrtc-sdk-js.git ../nabto-webrtc-sdk-js
+   ```
+
+2. Install and start the server:
+   ```bash
+   cd ../nabto-webrtc-sdk-js/integration_test_server
+   bun install
+   bun dev
+   ```
+
+3. Run integration tests:
+   ```bash
+   cargo test -- --ignored --test-threads=1
+   # Or use: cargo integration-test
+   ```
+
 ## Development Status
 
 This SDK is currently in early development.
@@ -113,3 +156,5 @@ TBD
 ## Contributing
 
 Contributions are welcome! Please feel free to submit issues or pull requests.
+
+Before submitting a PR, please run `./ci-check.sh` to ensure all checks pass.

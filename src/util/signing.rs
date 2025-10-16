@@ -58,6 +58,7 @@ pub trait MessageSigner: Send + Sync {
 }
 
 /// None message signer (no actual signing)
+#[derive(Default)]
 pub struct NoneMessageSigner;
 
 impl NoneMessageSigner {

@@ -12,6 +12,7 @@ use serde_json::Value as JsonValue;
 
 /// WebRTC signaling message types
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[allow(dead_code)] // Used for documentation and future extensions
 pub enum WebrtcSignalingMessageType {
     #[serde(rename = "DESCRIPTION")]
     Description,
@@ -21,6 +22,7 @@ pub enum WebrtcSignalingMessageType {
 
 /// Setup message types
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[allow(dead_code)] // Used for documentation and future extensions
 pub enum SetupMessageType {
     #[serde(rename = "SETUP_REQUEST")]
     SetupRequest,

@@ -1,0 +1,26 @@
+# Cargo configuration for nabto-webrtc-sdk-rust
+
+[alias]
+# Run all CI checks locally (quick version - no release build)
+ci = "run --quiet --package xtask --bin xtask -- ci"
+
+# Run quick CI checks (format, clippy, test)
+quick-check = """!f() {
+    set -e
+    echo '➜ Checking formatting...' && cargo fmt --all -- --check &&
+    echo '➜ Running clippy...' && cargo clippy --all-targets --all-features -- -D warnings &&
+    echo '➜ Running tests...' && cargo test --quiet &&
+    echo '✓ All quick checks passed!'
+}; f"""
+
+# Format and check in one command
+fmt-check = "fmt --all -- --check"
+
+# Run clippy with CI settings
+clippy-ci = "clippy --all-targets --all-features -- -D warnings"
+
+# Build everything (lib, tests, examples, docs)
+build-all = "build --all-targets --verbose"
+
+# Run integration tests (requires integration test server)
+integration-test = "test --verbose -- --ignored --test-threads=1"
