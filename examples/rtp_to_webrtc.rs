@@ -160,16 +160,23 @@ async fn main() -> Result<()> {
                     println!("  Channel ID: {}", channel.channel_id());
                     println!("  Authorized: {}", authorized);
 
-                    // If shared secret is configured, check authorization
-                    if shared_secret_for_task.is_some() && !authorized {
-                        println!("  Rejecting unauthorized connection (shared secret required)");
+                    // Accept connection if:
+                    // 1. Centrally authorized (authorized=true), OR
+                    // 2. Shared secret is configured (will validate JWT)
+                    if !authorized && shared_secret_for_task.is_none() {
+                        println!("  Rejecting unauthorized connection (no shared secret configured)");
                         println!();
                         continue;
+                    }
+
+                    if shared_secret_for_task.is_some() && !authorized {
+                        println!("  Using shared secret authentication (JWT)");
                     }
 
                     println!();
                     println!("TODO: Handle WebRTC negotiation for this channel");
                     // TODO: Create peer connection and handle SDP exchange
+                    // TODO: Validate JWT if shared secret is configured
                 }
                 nabto_webrtc_sdk::device::DeviceEvent::StateChanged {
                     old_state,
