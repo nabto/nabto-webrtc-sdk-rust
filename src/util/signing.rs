@@ -204,17 +204,13 @@ impl MessageSigner for JwtMessageSigner {
                     // Verify nonces
                     if let Some(ref remote_nonce) = self.remote_nonce {
                         if *remote_nonce != claims.signer_nonce {
-                            return Err(Error::Signaling(
-                                "Signer nonce mismatch".to_string(),
-                            ));
+                            return Err(Error::Signaling("Signer nonce mismatch".to_string()));
                         }
                     }
 
                     if let Some(ref my_nonce) = self.my_nonce {
                         if claims.verifier_nonce.as_ref() != Some(my_nonce) {
-                            return Err(Error::Signaling(
-                                "Verifier nonce mismatch".to_string(),
-                            ));
+                            return Err(Error::Signaling("Verifier nonce mismatch".to_string()));
                         }
                     }
                 }

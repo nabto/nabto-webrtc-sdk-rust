@@ -7,12 +7,10 @@
 //! - Channel setup (SETUP_REQUEST/RESPONSE exchange)
 //! - Event emission for WebRTC messages, errors, and setup completion
 
-use crate::device::{SignalingChannel, SignalingService};
-use super::message_encoder::{
-    IceServer, MessageEncoder, SignalingMessage, WebrtcSignalingMessage,
-};
+use super::message_encoder::{IceServer, MessageEncoder, SignalingMessage, WebrtcSignalingMessage};
 use super::signing::{JwtMessageSigner, MessageSigner, NoneMessageSigner};
 use crate::device::routing::ErrorInfo;
+use crate::device::{SignalingChannel, SignalingService};
 use crate::{Error, Result};
 use serde_json::Value as JsonValue;
 use std::sync::{Arc, Mutex};
@@ -80,10 +78,7 @@ pub struct DeviceMessageTransport {
 
 impl DeviceMessageTransport {
     /// Create a new DeviceMessageTransport
-    pub fn new(
-        channel: SignalingChannel,
-        options: DeviceMessageTransportOptions,
-    ) -> Self {
+    pub fn new(channel: SignalingChannel, options: DeviceMessageTransportOptions) -> Self {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
 
         Self {
@@ -130,16 +125,15 @@ impl DeviceMessageTransport {
     }
 
     /// Handle device setup request
-    async fn handle_device_setup_request<S: SignalingService>(
-        &self,
-        service: &S,
-    ) -> Result<()> {
+    async fn handle_device_setup_request<S: SignalingService>(&self, service: &S) -> Result<()> {
         // Request ICE servers from the device
         // For now, we'll return None - the device implementation should provide this
         let ice_servers: Option<Vec<IceServer>> = None;
 
         // Send SETUP_RESPONSE
-        let response = SignalingMessage::SetupResponse { ice_servers: ice_servers.clone() };
+        let response = SignalingMessage::SetupResponse {
+            ice_servers: ice_servers.clone(),
+        };
         self.send_signaling_message(&response, service).await?;
 
         // Emit setup done event
@@ -205,7 +199,9 @@ impl DeviceMessageTransport {
             if let Some(ref mut signer) = *signer {
                 signer.verify_message(message)?
             } else {
-                return Err(Error::Signaling("Message signer not initialized".to_string()));
+                return Err(Error::Signaling(
+                    "Message signer not initialized".to_string(),
+                ));
             }
         };
 
@@ -232,11 +228,9 @@ impl DeviceMessageTransport {
 
         // Convert to SignalingMessage
         let signaling_msg = match message {
-            WebrtcSignalingMessage::Description { description } => {
-                SignalingMessage::Description {
-                    description: description.clone(),
-                }
-            }
+            WebrtcSignalingMessage::Description { description } => SignalingMessage::Description {
+                description: description.clone(),
+            },
             WebrtcSignalingMessage::Candidate { candidate } => SignalingMessage::Candidate {
                 candidate: candidate.clone(),
             },
@@ -260,7 +254,9 @@ impl DeviceMessageTransport {
             if let Some(ref mut signer) = *signer {
                 signer.sign_message(encoded)?
             } else {
-                return Err(Error::Signaling("Message signer not initialized".to_string()));
+                return Err(Error::Signaling(
+                    "Message signer not initialized".to_string(),
+                ));
             }
         };
 
@@ -285,7 +281,9 @@ impl DeviceMessageTransport {
     /// Emit setup done event
     async fn emit_setup_done(&self, ice_servers: Option<Vec<IceServer>>) {
         *self.state.lock().unwrap() = State::Signaling;
-        let _ = self.event_tx.send(DeviceTransportEvent::SetupDone(ice_servers));
+        let _ = self
+            .event_tx
+            .send(DeviceTransportEvent::SetupDone(ice_servers));
     }
 
     /// Emit error event
@@ -300,7 +298,9 @@ impl DeviceMessageTransport {
         service.send_error(channel.channel_id(), error_info);
 
         // Emit error event
-        let _ = self.event_tx.send(DeviceTransportEvent::Error(error.to_string()));
+        let _ = self
+            .event_tx
+            .send(DeviceTransportEvent::Error(error.to_string()));
     }
 }
 
