@@ -39,6 +39,50 @@ jobs:
     - name: Run doc tests
       run: cargo test --doc --verbose
 
+  integration-test:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Rust
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        toolchain: stable
+
+    - name: Setup Bun
+      uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: latest
+
+    - name: Clone nabto-webrtc-sdk-js
+      run: |
+        git clone https://github.com/nabto/nabto-webrtc-sdk-js.git ../nabto-webrtc-sdk-js
+
+    - name: Install integration test server dependencies
+      working-directory: ../nabto-webrtc-sdk-js/integration_test_server
+      run: bun install
+
+    - name: Start integration test server
+      working-directory: ../nabto-webrtc-sdk-js/integration_test_server
+      run: |
+        bun run src/index.ts &
+        echo $! > server.pid
+        # Wait for server to be ready
+        timeout 30 bash -c 'until curl -f http://localhost:13745 2>/dev/null; do sleep 1; done' || exit 1
+
+    - name: Run integration tests
+      run: cargo test --verbose -- --ignored --test-threads=1
+
+    - name: Stop integration test server
+      if: always()
+      working-directory: ../nabto-webrtc-sdk-js/integration_test_server
+      run: |
+        if [ -f server.pid ]; then
+          kill $(cat server.pid) || true
+          rm server.pid
+        fi
+
   build-release:
     name: Build Release
     runs-on: ubuntu-latest
