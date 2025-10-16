@@ -12,7 +12,7 @@
 mod common;
 
 use common::{DeviceTestInstance, DeviceTestOptions};
-use nabto_webrtc_sdk::ConnectionState;
+use nabto_webrtc_sdk::device::ConnectionState;
 use std::time::Duration;
 
 /// Device Connectivity Test 1:

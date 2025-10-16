@@ -10,7 +10,7 @@
 //!   cargo run --example signaling_device_connect -- --product-id wp-abcdefghi --device-id wd-jklmnopqr --private-key device_key.pem
 
 use clap::Parser;
-use nabto_webrtc_sdk::{DeviceTokenGenerator, SignalingDevice, SignalingDeviceOptions};
+use nabto_webrtc_sdk::device::{DeviceTokenGenerator, SignalingDevice, SignalingDeviceOptions};
 use std::fs;
 use std::future::Future;
 use std::pin::Pin;
@@ -102,7 +102,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(async move {
         while let Some(event) = event_rx.recv().await {
             match event {
-                nabto_webrtc_sdk::DeviceEvent::NewChannel {
+                nabto_webrtc_sdk::device::DeviceEvent::NewChannel {
                     channel,
                     authorized,
                 } => {
@@ -110,7 +110,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("   Channel ID: {}", channel.channel_id());
                     println!("   Authorized: {}", authorized);
                 }
-                nabto_webrtc_sdk::DeviceEvent::StateChanged {
+                nabto_webrtc_sdk::device::DeviceEvent::StateChanged {
                     old_state,
                     new_state,
                 } => {

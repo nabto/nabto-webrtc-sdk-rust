@@ -10,7 +10,7 @@
 //!   cargo run --example request_ice_servers -- --product-id wp-abcdefghi --device-id wd-jklmnopqr --private-key device_key.pem
 
 use clap::Parser;
-use nabto_webrtc_sdk::{DeviceTokenGenerator, SignalingDevice, SignalingDeviceOptions};
+use nabto_webrtc_sdk::device::{DeviceTokenGenerator, SignalingDevice, SignalingDeviceOptions};
 use std::fs;
 use std::future::Future;
 use std::pin::Pin;

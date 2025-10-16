@@ -1,15 +1,17 @@
-//! Signaling Device module
+//! Device module
 //!
-//! This module contains the core implementation for device-side WebRTC signaling.
+//! This module contains the core device-side WebRTC signaling implementation,
+//! including connection management, channel handling, and protocol layers.
 
 mod channel;
 mod connection;
 mod http;
 mod reliability;
-mod routing;
+pub(crate) mod routing; // Visible to util module
 mod state;
 mod token;
 
+// Re-export public types
 pub use channel::{SignalingChannel, SignalingChannelEventHandler, SignalingService};
 pub use connection::{ConnectionEvent, WebSocketConfig, WebSocketConnection, WebSocketHandle};
 pub use http::IceServer;
@@ -134,7 +136,7 @@ impl SignalingDevice {
     ///
     /// The user should spawn this on a tokio task:
     /// ```no_run
-    /// # use nabto_webrtc_sdk::{SignalingDevice, SignalingDeviceOptions};
+    /// # use nabto_webrtc_sdk::device::{SignalingDevice, SignalingDeviceOptions};
     /// # #[tokio::main]
     /// # async fn main() {
     /// # let token_generator = Box::new(|| {
@@ -371,15 +373,12 @@ impl SignalingDevice {
     ///
     /// This signals the run() loop to stop. The caller should ensure the run() task
     /// completes before dropping the device.
-    pub fn stop(&mut self) {
+    pub async fn stop(&mut self) {
         self.should_stop = true;
 
         // Close WebSocket connection
         if let Some(handle) = &self.ws_handle {
-            let handle_clone = handle.clone();
-            tokio::spawn(async move {
-                let _ = handle_clone.close().await;
-            });
+            let _ = handle.close().await;
         }
 
         self.set_state(ConnectionState::Closed);

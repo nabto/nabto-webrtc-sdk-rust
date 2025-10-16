@@ -1,17 +1,30 @@
 //! Nabto WebRTC SDK for Rust
 //!
 //! This library provides a Rust interface for WebRTC signaling using the Nabto platform.
-//! This SDK focuses on device-side implementation.
+//!
+//! # Module Structure
+//!
+//! - `device`: Core device-side signaling implementation
+//! - `util`: Message transport utilities built on top of device
+//! - `error`: Error types used throughout the SDK
+//!
+//! # Example
+//!
+//! ```no_run
+//! use nabto_webrtc_sdk::device::{SignalingDevice, SignalingDeviceOptions};
+//! use nabto_webrtc_sdk::util::{DeviceMessageTransport, SecurityMode};
+//!
+//! # async fn example() {
+//! // Create a device...
+//! # }
+//! ```
 
+pub mod device;
 pub mod error;
-pub mod signaling_device;
 pub mod types;
+pub mod util;
 
 pub use error::{Error, Result};
-pub use signaling_device::{
-    ChannelState, ConnectionState, DeviceEvent, DeviceTokenGenerator, IceServer, SignalingDevice,
-    SignalingDeviceOptions,
-};
 
 #[cfg(test)]
 mod tests {
@@ -21,6 +34,6 @@ mod tests {
     fn test_lib_imports() {
         // Verify that core types are accessible
         let _: Option<Error> = None;
-        let _: Option<ConnectionState> = None;
+        let _: Option<device::ConnectionState> = None;
     }
 }
