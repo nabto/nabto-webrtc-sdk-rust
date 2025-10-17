@@ -12,7 +12,10 @@ mod state;
 mod token;
 
 // Re-export public types
-pub use channel::{SignalingChannel, SignalingChannelEventHandler, SignalingService};
+pub use channel::{
+    ChannelHandle, ChannelRequest, SignalingChannel, SignalingChannelEventHandler,
+    SignalingService,
+};
 pub use connection::{ConnectionEvent, WebSocketConfig, WebSocketConnection, WebSocketHandle};
 pub use http::IceServer;
 pub use routing::ErrorInfo; // Re-export ErrorInfo for use with SignalingService
@@ -42,12 +45,20 @@ const MAX_RECONNECT_WAIT_SECONDS: u32 = 60;
 pub type TokenGenerator =
     Box<dyn Fn() -> Pin<Box<dyn Future<Output = Result<String>> + Send>> + Send + Sync>;
 
+/// Commands that can be sent to the SignalingDevice
+pub enum DeviceCommand {
+    /// Send a ping to check if the connection is alive
+    CheckAlive,
+}
+
 /// Events emitted by the SignalingDevice
-#[derive(Debug)]
 pub enum DeviceEvent {
     /// A new signaling channel is ready
+    /// The handle can be used to send messages on the channel
+    /// The message_rx can be used to receive messages from the channel
     NewChannel {
-        channel: SignalingChannel,
+        handle: ChannelHandle,
+        message_rx: mpsc::Receiver<JsonValue>,
         authorized: bool,
     },
 
@@ -56,6 +67,32 @@ pub enum DeviceEvent {
         old_state: ConnectionState,
         new_state: ConnectionState,
     },
+}
+
+// Manual Debug implementation since mpsc::Receiver doesn't implement Debug
+impl std::fmt::Debug for DeviceEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DeviceEvent::NewChannel {
+                handle,
+                authorized,
+                ..
+            } => f
+                .debug_struct("NewChannel")
+                .field("channel_id", &handle.channel_id())
+                .field("authorized", authorized)
+                .field("message_rx", &"<mpsc::Receiver>")
+                .finish(),
+            DeviceEvent::StateChanged {
+                old_state,
+                new_state,
+            } => f
+                .debug_struct("StateChanged")
+                .field("old_state", old_state)
+                .field("new_state", new_state)
+                .finish(),
+        }
+    }
 }
 
 /// Options for creating a SignalingDevice
@@ -82,12 +119,17 @@ pub struct SignalingDevice {
     // Event channel for emitting device events
     device_event_tx: mpsc::Sender<DeviceEvent>,
 
+    // Command channel for receiving commands
+    command_rx: Option<mpsc::Receiver<DeviceCommand>>,
+
     // WebSocket connection
     ws_handle: Option<WebSocketHandle>,
     ws_event_rx: Option<mpsc::Receiver<ConnectionEvent>>,
 
     // Channel management
     channels: HashMap<String, SignalingChannel>,
+    channel_request_tx: mpsc::Sender<ChannelRequest>,
+    channel_request_rx: Option<mpsc::Receiver<ChannelRequest>>,
 
     // Retry state
     reconnect_counter: u32,
@@ -98,9 +140,16 @@ pub struct SignalingDevice {
 impl SignalingDevice {
     /// Create a new SignalingDevice
     ///
-    /// Returns the device instance and a receiver for device events.
-    /// The receiver should be polled to handle NewChannel events and other device events.
-    pub fn new(options: SignalingDeviceOptions) -> (Self, mpsc::Receiver<DeviceEvent>) {
+    /// Returns the device instance, a receiver for device events, and a sender for device commands.
+    /// The event receiver should be polled to handle NewChannel events and other device events.
+    /// The command sender can be used to send commands to the device (e.g., CheckAlive).
+    pub fn new(
+        options: SignalingDeviceOptions,
+    ) -> (
+        Self,
+        mpsc::Receiver<DeviceEvent>,
+        mpsc::Sender<DeviceCommand>,
+    ) {
         let endpoint_url = options
             .endpoint_url
             .clone()
@@ -113,21 +162,26 @@ impl SignalingDevice {
         );
 
         let (device_event_tx, device_event_rx) = mpsc::channel(32);
+        let (channel_request_tx, channel_request_rx) = mpsc::channel(32);
+        let (command_tx, command_rx) = mpsc::channel(32);
 
         let device = Self {
             http_api,
             options,
             state: ConnectionState::New,
             device_event_tx,
+            command_rx: Some(command_rx),
             ws_handle: None,
             ws_event_rx: None,
             channels: HashMap::new(),
+            channel_request_tx,
+            channel_request_rx: Some(channel_request_rx),
             reconnect_counter: 0,
             connected_at: None,
             should_stop: false,
         };
 
-        (device, device_event_rx)
+        (device, device_event_rx, command_tx)
     }
 
     /// Run the signaling device event loop
@@ -150,7 +204,7 @@ impl SignalingDevice {
     /// #     device_id: "wd-test".to_string(),
     /// #     token_generator,
     /// # };
-    /// let (mut device, event_rx) = SignalingDevice::new(options);
+    /// let (mut device, event_rx, command_tx) = SignalingDevice::new(options);
     ///
     /// // Spawn the device run loop
     /// tokio::spawn(async move {
@@ -209,6 +263,9 @@ impl SignalingDevice {
                             self.connected_at = Some(Instant::now());
                             self.reconnect_counter = 0;
                             eprintln!("Successfully connected to signaling service");
+
+                            // Retransmit unacked messages for all existing channels after reconnection
+                            self.retransmit_unacked_messages();
                         }
                         Err(e) => {
                             eprintln!("Connection failed: {:?}", e);
@@ -218,31 +275,45 @@ impl SignalingDevice {
                     }
                 }
                 ConnectionState::Connected => {
-                    // Process WebSocket events
-                    if let Some(rx) = &mut self.ws_event_rx {
-                        tokio::select! {
-                            event = rx.recv() => {
-                                match event {
-                                    Some(event) => {
-                                        self.handle_connection_event(event).await;
+                    // Process WebSocket events, channel requests, and commands
+                    if let Some(ws_rx) = &mut self.ws_event_rx {
+                        if let Some(ch_rx) = &mut self.channel_request_rx {
+                            if let Some(cmd_rx) = &mut self.command_rx {
+                                tokio::select! {
+                                    event = ws_rx.recv() => {
+                                        match event {
+                                            Some(event) => {
+                                                self.handle_connection_event(event).await;
+                                            }
+                                            None => {
+                                                // WebSocket event channel closed
+                                                eprintln!("WebSocket event channel closed");
+                                                self.transition_to_reconnect();
+                                            }
+                                        }
                                     }
-                                    None => {
-                                        // WebSocket event channel closed
-                                        eprintln!("WebSocket event channel closed");
-                                        self.transition_to_reconnect();
+                                    request = ch_rx.recv() => {
+                                        if let Some(request) = request {
+                                            self.handle_channel_request(request);
+                                        }
                                     }
-                                }
-                            }
-                            _ = async {
-                                loop {
-                                    if self.should_stop {
-                                        break;
+                                    command = cmd_rx.recv() => {
+                                        if let Some(command) = command {
+                                            self.handle_command(command).await;
+                                        }
                                     }
-                                    tokio::time::sleep(Duration::from_millis(100)).await;
-                                }
-                            } => {
-                                if self.should_stop {
-                                    break;
+                                    _ = async {
+                                        loop {
+                                            if self.should_stop {
+                                                break;
+                                            }
+                                            tokio::time::sleep(Duration::from_millis(100)).await;
+                                        }
+                                    } => {
+                                        if self.should_stop {
+                                            break;
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -310,6 +381,23 @@ impl SignalingDevice {
         self.set_state(ConnectionState::WaitRetry);
     }
 
+    /// Retransmit unacked messages for all channels after reconnection
+    fn retransmit_unacked_messages(&mut self) {
+        let channel_ids: Vec<String> = self.channels.keys().cloned().collect();
+
+        eprintln!("[RETRANSMIT] Retransmitting unacked messages for {} channels", channel_ids.len());
+
+        for channel_id in channel_ids {
+            eprintln!("[RETRANSMIT] Processing channel: {}", channel_id);
+            if let Some(mut channel) = self.channels.remove(&channel_id) {
+                channel.handle_websocket_reconnect(self);
+                self.channels.insert(channel_id, channel);
+            }
+        }
+
+        eprintln!("[RETRANSMIT] Retransmission complete");
+    }
+
     /// Handle a single connection event
     async fn handle_connection_event(&mut self, event: ConnectionEvent) {
         match event {
@@ -342,6 +430,46 @@ impl SignalingDevice {
             }
             ConnectionEvent::PeerOffline { channel_id } => {
                 self.handle_peer_offline(channel_id);
+            }
+        }
+    }
+
+    /// Handle a channel request (from a ChannelHandle)
+    fn handle_channel_request(&mut self, request: ChannelRequest) {
+        match request {
+            ChannelRequest::SendMessage {
+                channel_id,
+                message,
+            } => {
+                // Send through the channel's reliability layer
+                // We need to remove the channel temporarily to avoid borrowing issues
+                if let Some(mut channel) = self.channels.remove(&channel_id) {
+                    if let Err(e) = channel.send_message(message, self) {
+                        eprintln!("Failed to send message on channel {}: {:?}", channel_id, e);
+                    }
+                    // Put the channel back
+                    self.channels.insert(channel_id, channel);
+                } else {
+                    eprintln!("Channel {} not found for sending message", channel_id);
+                }
+            }
+            ChannelRequest::SendError { channel_id, error } => {
+                self.send_error(&channel_id, error);
+            }
+            ChannelRequest::Close { channel_id } => {
+                self.channels.remove(&channel_id);
+                eprintln!("Closed channel {}", channel_id);
+            }
+        }
+    }
+
+    /// Handle a command sent to the device
+    async fn handle_command(&self, command: DeviceCommand) {
+        match command {
+            DeviceCommand::CheckAlive => {
+                if let Err(e) = self.check_alive().await {
+                    eprintln!("check_alive failed: {:?}", e);
+                }
             }
         }
     }
@@ -412,6 +540,13 @@ impl SignalingDevice {
         self.state
     }
 
+    /// Get a clone of the WebSocket handle if connected
+    ///
+    /// Returns None if not currently connected
+    pub fn get_websocket_handle(&self) -> Option<WebSocketHandle> {
+        self.ws_handle.clone()
+    }
+
     /// Handle incoming message on a channel
     async fn handle_message(&mut self, channel_id: String, message: JsonValue, authorized: bool) {
         eprintln!(
@@ -438,12 +573,16 @@ impl SignalingDevice {
             match SignalingChannel::is_initial_message(&message) {
                 Ok(true) => {
                     eprintln!("Initial message detected, creating new channel");
-                    // Create new channel
-                    let mut channel = SignalingChannel::new(channel_id.clone());
-                    channel.set_state(ChannelState::Connected);
+                    // Create new channel with message channel set up
+                    let channel_for_map = SignalingChannel::new(channel_id.clone());
+                    let (mut channel_with_rx, message_rx) = channel_for_map.with_message_channel();
+                    channel_with_rx.set_state(ChannelState::Connected);
+
+                    // Set the device sender so the channel can send messages back
+                    channel_with_rx.set_device_sender(self.channel_request_tx.clone());
 
                     // Handle the initial message
-                    if let Err(e) = channel.handle_routing_message(message, self) {
+                    if let Err(e) = channel_with_rx.handle_routing_message(message, self) {
                         eprintln!(
                             "Error handling initial message on channel {}: {:?}",
                             channel_id, e
@@ -451,18 +590,23 @@ impl SignalingDevice {
                         return;
                     }
 
-                    // Emit NewChannel event before adding to map
+                    // Add to channels map
+                    self.channels.insert(channel_id.clone(), channel_with_rx);
+
+                    // Create a handle for the channel (lightweight, can be cloned)
+                    let handle = ChannelHandle::new(channel_id.clone(), self.channel_request_tx.clone());
+
+                    // Emit NewChannel event after adding to map
+                    // The message_rx is sent along with the handle so tests can receive messages
                     let event = DeviceEvent::NewChannel {
-                        channel: channel.clone(), // TODO: Need to implement Clone or use Arc
+                        handle,
+                        message_rx,
                         authorized,
                     };
 
                     if let Err(e) = self.device_event_tx.try_send(event) {
                         eprintln!("Failed to emit NewChannel event: {:?}", e);
                     }
-
-                    // Add to channels map
-                    self.channels.insert(channel_id, channel);
                 }
                 Ok(false) => {
                     // Not an initial message and no channel exists - send error

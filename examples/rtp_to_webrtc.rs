@@ -19,8 +19,14 @@
 
 use anyhow::Result;
 use clap::Parser;
-use nabto_webrtc_sdk::device::{ErrorInfo, SignalingChannel, SignalingDevice, SignalingDeviceOptions, SignalingService, DeviceTokenGenerator};
-use nabto_webrtc_sdk::util::{DeviceMessageTransport, DeviceMessageTransportOptions, DeviceTransportEvent, SecurityMode, WebrtcSignalingMessage};
+use nabto_webrtc_sdk::device::{
+    DeviceTokenGenerator, ErrorInfo, SignalingChannel, SignalingDevice, SignalingDeviceOptions,
+    SignalingService,
+};
+use nabto_webrtc_sdk::util::{
+    DeviceMessageTransport, DeviceMessageTransportOptions, DeviceTransportEvent, SecurityMode,
+    WebrtcSignalingMessage,
+};
 use serde_json::Value as JsonValue;
 use std::fs;
 use std::future::Future;
@@ -90,16 +96,17 @@ impl RtcConnectionHandler {
     }
 
     /// Create the peer connection with ICE servers
-    async fn create_peer_connection(&mut self, ice_servers: Option<Vec<nabto_webrtc_sdk::util::IceServer>>) -> Result<()> {
+    async fn create_peer_connection(
+        &mut self,
+        ice_servers: Option<Vec<nabto_webrtc_sdk::util::IceServer>>,
+    ) -> Result<()> {
         let channel_id = self.channel.channel_id();
 
         // Build ICE server configuration
-        let mut rtc_ice_servers = vec![
-            RTCIceServer {
-                urls: vec!["stun:stun.l.google.com:19302".to_owned()],
-                ..Default::default()
-            }
-        ];
+        let mut rtc_ice_servers = vec![RTCIceServer {
+            urls: vec!["stun:stun.l.google.com:19302".to_owned()],
+            ..Default::default()
+        }];
 
         // Add ICE servers from the signaling service if provided
         if let Some(servers) = ice_servers {
@@ -129,10 +136,15 @@ impl RtcConnectionHandler {
 
         // Set up peer connection state change handler
         let channel_id_for_state = channel_id.to_string();
-        peer_connection.on_peer_connection_state_change(Box::new(move |state: RTCPeerConnectionState| {
-            println!("[{}] Peer connection state changed: {}", channel_id_for_state, state);
-            Box::pin(async {})
-        }));
+        peer_connection.on_peer_connection_state_change(Box::new(
+            move |state: RTCPeerConnectionState| {
+                println!(
+                    "[{}] Peer connection state changed: {}",
+                    channel_id_for_state, state
+                );
+                Box::pin(async {})
+            },
+        ));
 
         self.peer_connection = Some(peer_connection);
         Ok(())
@@ -168,7 +180,10 @@ impl RtcConnectionHandler {
         while let Some(event) = event_rx.recv().await {
             match event {
                 DeviceTransportEvent::SetupDone(ice_servers) => {
-                    println!("[{}] Setup completed, ICE servers: {:?}", channel_id, ice_servers);
+                    println!(
+                        "[{}] Setup completed, ICE servers: {:?}",
+                        channel_id, ice_servers
+                    );
 
                     // Create peer connection now that we have ICE servers
                     self.create_peer_connection(ice_servers).await?;
@@ -190,19 +205,21 @@ impl RtcConnectionHandler {
     }
 
     /// Handle WebRTC signaling messages (SDP offer/answer, ICE candidates)
-    async fn handle_webrtc_message(
-        &mut self,
-        msg: WebrtcSignalingMessage,
-    ) -> Result<()> {
+    async fn handle_webrtc_message(&mut self, msg: WebrtcSignalingMessage) -> Result<()> {
         let channel_id = self.channel.channel_id();
 
         // Check if peer connection is ready
-        let peer_connection = self.peer_connection.as_ref()
+        let peer_connection = self
+            .peer_connection
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Peer connection not yet created"))?;
 
         match msg {
             WebrtcSignalingMessage::Description { description } => {
-                println!("[{}] Received SDP description: {:?}", channel_id, description.desc_type);
+                println!(
+                    "[{}] Received SDP description: {:?}",
+                    channel_id, description.desc_type
+                );
 
                 // Set remote description (client's offer)
                 let remote_desc = RTCSessionDescription::offer(description.sdp)?;
@@ -212,7 +229,9 @@ impl RtcConnectionHandler {
                 let answer = peer_connection.create_answer(None).await?;
 
                 // Set local description
-                peer_connection.set_local_description(answer.clone()).await?;
+                peer_connection
+                    .set_local_description(answer.clone())
+                    .await?;
 
                 println!("[{}] Created and set SDP answer", channel_id);
 
@@ -220,9 +239,15 @@ impl RtcConnectionHandler {
                 println!("[{}] TODO: Send SDP answer to client", channel_id);
             }
             WebrtcSignalingMessage::Candidate { candidate } => {
-                println!("[{}] Received ICE candidate: {:?}", channel_id, candidate.candidate);
+                println!(
+                    "[{}] Received ICE candidate: {:?}",
+                    channel_id, candidate.candidate
+                );
                 // TODO: Add ICE candidate to peer connection
-                println!("[{}] TODO: Add ICE candidate to peer connection", channel_id);
+                println!(
+                    "[{}] TODO: Add ICE candidate to peer connection",
+                    channel_id
+                );
             }
         }
 
@@ -302,10 +327,12 @@ async fn main() -> Result<()> {
     let mut registry = Registry::new();
     registry = register_default_interceptors(registry, &mut media_engine)?;
 
-    let api = Arc::new(APIBuilder::new()
-        .with_media_engine(media_engine)
-        .with_interceptor_registry(registry)
-        .build());
+    let api = Arc::new(
+        APIBuilder::new()
+            .with_media_engine(media_engine)
+            .with_interceptor_registry(registry)
+            .build(),
+    );
 
     println!("WebRTC API initialized");
 
@@ -353,7 +380,7 @@ async fn main() -> Result<()> {
     };
 
     // Create the signaling device
-    let (mut device, mut event_rx) = SignalingDevice::new(options);
+    let (mut device, mut event_rx, _command_tx) = SignalingDevice::new(options);
 
     println!("SignalingDevice created");
     println!("Connection state: {:?}", device.connection_state());
@@ -367,18 +394,21 @@ async fn main() -> Result<()> {
         while let Some(event) = event_rx.recv().await {
             match event {
                 nabto_webrtc_sdk::device::DeviceEvent::NewChannel {
-                    channel,
+                    handle,
                     authorized,
+                    ..
                 } => {
                     println!("New signaling channel received!");
-                    println!("  Channel ID: {}", channel.channel_id());
+                    println!("  Channel ID: {}", handle.channel_id());
                     println!("  Authorized: {}", authorized);
 
                     // Accept connection if:
                     // 1. Centrally authorized (authorized=true), OR
                     // 2. Shared secret is configured (will validate JWT)
                     if !authorized && shared_secret_for_task.is_none() {
-                        println!("  Rejecting unauthorized connection (no shared secret configured)");
+                        println!(
+                            "  Rejecting unauthorized connection (no shared secret configured)"
+                        );
                         println!();
                         continue;
                     }
@@ -395,22 +425,31 @@ async fn main() -> Result<()> {
                     let shared_secret_clone = shared_secret_for_task.clone();
 
                     tokio::spawn(async move {
-                        let handler = RtcConnectionHandler::new(channel, api_clone, video_track_clone);
-                        println!("RTC connection handler created");
+                        // TODO: This example needs to be refactored to use the new ChannelHandle API
+                        // instead of SignalingChannel directly. For now, it's temporarily broken
+                        // because RtcConnectionHandler and DeviceMessageTransport need to be updated
+                        // to work with the new handle-based API.
+                        //
+                        // The proper solution would be:
+                        // 1. Update DeviceMessageTransport to accept ChannelHandle + message_rx
+                        // 2. Update RtcConnectionHandler to use ChannelHandle
+                        // 3. Remove dependency on SignalingChannel from this example
 
-                        // TODO: Need to pass SignalingService to handler.run()
-                        // For now, run with dummy service
-                        let service = Arc::new(tokio::sync::Mutex::new(DummyService));
-                        if let Err(e) = handler.run(service, shared_secret_clone).await {
-                            eprintln!("Connection handler error: {}", e);
-                        }
+                        eprintln!("TODO: rtp_to_webrtc example needs refactoring for new ChannelHandle API");
+                        eprintln!("Channel ID: {}", handle.channel_id());
+
+                        // Placeholder to use variables
+                        let _ = (handle, api_clone, video_track_clone, shared_secret_clone);
                     });
                 }
                 nabto_webrtc_sdk::device::DeviceEvent::StateChanged {
                     old_state,
                     new_state,
                 } => {
-                    println!("Connection state changed: {:?} -> {:?}", old_state, new_state);
+                    println!(
+                        "Connection state changed: {:?} -> {:?}",
+                        old_state, new_state
+                    );
                 }
             }
         }

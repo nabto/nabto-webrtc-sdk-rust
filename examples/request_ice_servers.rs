@@ -87,7 +87,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Create the signaling device
-    let (device, _event_rx) = SignalingDevice::new(options);
+    let (device, _event_rx, _command_tx) = SignalingDevice::new(options);
 
     println!("SignalingDevice created successfully");
     println!("Connection state: {:?}", device.connection_state());

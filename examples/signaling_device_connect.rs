@@ -92,7 +92,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Create the signaling device
-    let (mut device, mut event_rx) = SignalingDevice::new(options);
+    let (mut device, mut event_rx, _command_tx) = SignalingDevice::new(options);
 
     println!("📱 SignalingDevice created");
     println!("   Connection state: {:?}", device.connection_state());
@@ -103,11 +103,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         while let Some(event) = event_rx.recv().await {
             match event {
                 nabto_webrtc_sdk::device::DeviceEvent::NewChannel {
-                    channel,
+                    handle,
                     authorized,
+                    ..
                 } => {
                     println!("📡 New channel received!");
-                    println!("   Channel ID: {}", channel.channel_id());
+                    println!("   Channel ID: {}", handle.channel_id());
                     println!("   Authorized: {}", authorized);
                 }
                 nabto_webrtc_sdk::device::DeviceEvent::StateChanged {

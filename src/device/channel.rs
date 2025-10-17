@@ -6,6 +6,80 @@ use super::state::ChannelState;
 use crate::{Error, Result};
 use serde_json::Value as JsonValue;
 use std::collections::VecDeque;
+use tokio::sync::mpsc;
+
+/// Request from a SignalingChannel to the SignalingDevice
+#[derive(Debug, Clone)]
+pub enum ChannelRequest {
+    /// Send a routing message on this channel
+    SendMessage {
+        channel_id: String,
+        message: JsonValue,
+    },
+    /// Send an error on this channel
+    SendError {
+        channel_id: String,
+        error: ErrorInfo,
+    },
+    /// Close this channel
+    Close { channel_id: String },
+}
+
+/// Lightweight handle to a signaling channel for sending messages
+/// This handle can be cloned and shared, while the actual channel state
+/// remains owned by the SignalingDevice
+#[derive(Clone)]
+pub struct ChannelHandle {
+    channel_id: String,
+    device_tx: mpsc::Sender<ChannelRequest>,
+}
+
+impl ChannelHandle {
+    /// Create a new channel handle
+    pub fn new(channel_id: String, device_tx: mpsc::Sender<ChannelRequest>) -> Self {
+        Self {
+            channel_id,
+            device_tx,
+        }
+    }
+
+    /// Get the channel ID
+    pub fn channel_id(&self) -> &str {
+        &self.channel_id
+    }
+
+    /// Send a message through this channel
+    pub async fn send_message(&self, message: JsonValue) -> crate::Result<()> {
+        self.device_tx
+            .send(ChannelRequest::SendMessage {
+                channel_id: self.channel_id.clone(),
+                message,
+            })
+            .await
+            .map_err(|e| crate::Error::Signaling(format!("Failed to send message: {}", e)))
+    }
+
+    /// Send an error through this channel
+    pub async fn send_error(&self, error: ErrorInfo) -> crate::Result<()> {
+        self.device_tx
+            .send(ChannelRequest::SendError {
+                channel_id: self.channel_id.clone(),
+                error,
+            })
+            .await
+            .map_err(|e| crate::Error::Signaling(format!("Failed to send error: {}", e)))
+    }
+
+    /// Close this channel
+    pub async fn close(&self) -> crate::Result<()> {
+        self.device_tx
+            .send(ChannelRequest::Close {
+                channel_id: self.channel_id.clone(),
+            })
+            .await
+            .map_err(|e| crate::Error::Signaling(format!("Failed to close channel: {}", e)))
+    }
+}
 
 /// Trait for SignalingChannel to communicate with SignalingDevice
 pub trait SignalingService {
@@ -49,6 +123,9 @@ pub struct SignalingChannel {
     reliability: Reliability,
     operations: VecDeque<Operation>,
     handling_operations: bool,
+    message_tx: Option<mpsc::Sender<JsonValue>>,
+    /// Channel for sending requests back to the device
+    device_tx: Option<mpsc::Sender<ChannelRequest>>,
 }
 
 impl SignalingChannel {
@@ -60,7 +137,29 @@ impl SignalingChannel {
             reliability: Reliability::new(),
             operations: VecDeque::new(),
             handling_operations: false,
+            message_tx: None,
+            device_tx: None,
         }
+    }
+
+    /// Set the device sender for this channel
+    /// This allows the channel to send requests back to the device
+    pub fn set_device_sender(&mut self, tx: mpsc::Sender<ChannelRequest>) {
+        self.device_tx = Some(tx);
+    }
+
+    /// Set the message event sender for this channel
+    /// This allows the channel to emit message events to the application
+    pub fn set_message_sender(&mut self, tx: mpsc::Sender<JsonValue>) {
+        self.message_tx = Some(tx);
+    }
+
+    /// Get a receiver for messages on this channel
+    /// Returns (channel, message_rx) where message_rx receives incoming messages
+    pub fn with_message_channel(mut self) -> (Self, mpsc::Receiver<JsonValue>) {
+        let (tx, rx) = mpsc::channel(32);
+        self.message_tx = Some(tx);
+        (self, rx)
     }
 
     /// Get the channel ID
@@ -128,10 +227,15 @@ impl SignalingChannel {
     /// Handle WebSocket reconnection - retransmit unacked messages
     pub fn handle_websocket_reconnect<S: SignalingService>(&mut self, service: &S) {
         if self.state == ChannelState::Closed || self.state == ChannelState::Failed {
+            eprintln!("[CHANNEL {}] Skipping retransmit - channel state: {:?}", self.channel_id, self.state);
             return;
         }
 
-        for msg in self.reliability.handle_connect() {
+        let messages = self.reliability.handle_connect();
+        eprintln!("[CHANNEL {}] Retransmitting {} unacked messages", self.channel_id, messages.len());
+
+        for msg in messages {
+            eprintln!("[CHANNEL {}] Retransmitting message: {:?}", self.channel_id, msg);
             if let Ok(json) = serde_json::to_value(&msg) {
                 service.send_routing_message(&self.channel_id, json);
             }
@@ -192,6 +296,34 @@ impl SignalingChannel {
         Ok(())
     }
 
+    /// Send a message to the other peer (async version using internal channel)
+    /// This version uses the internal device_tx channel and doesn't require a SignalingService
+    pub async fn send_message_async(&mut self, message: JsonValue) -> Result<()> {
+        if self.state == ChannelState::Closed || self.state == ChannelState::Failed {
+            return Err(Error::Signaling(
+                "Cannot send message on closed or failed channel".to_string(),
+            ));
+        }
+
+        let rel_msg = self.reliability.send_reliable_message(message);
+        let json = serde_json::to_value(&rel_msg)
+            .map_err(|e| Error::Signaling(format!("Failed to serialize message: {}", e)))?;
+
+        if let Some(tx) = &self.device_tx {
+            tx.send(ChannelRequest::SendMessage {
+                channel_id: self.channel_id.clone(),
+                message: json,
+            })
+            .await
+            .map_err(|e| Error::Signaling(format!("Failed to send message request: {}", e)))?;
+            Ok(())
+        } else {
+            Err(Error::Signaling(
+                "No device sender configured for this channel".to_string(),
+            ))
+        }
+    }
+
     /// Send an error to the other peer
     pub fn send_error<S: SignalingService>(
         &mut self,
@@ -249,9 +381,12 @@ impl SignalingChannel {
                     // Initial channel setup already done
                 }
                 Operation::Message(msg) => {
-                    // TODO: Emit message event or send through channel
-                    // For now, just log
                     eprintln!("Channel {} received message: {:?}", self.channel_id, msg);
+                    // Send message through channel if available
+                    if let Some(tx) = &self.message_tx {
+                        // Try to send, ignore if receiver is dropped
+                        let _ = tx.try_send(msg);
+                    }
                 }
             }
         }

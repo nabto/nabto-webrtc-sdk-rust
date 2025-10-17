@@ -2,7 +2,7 @@
 
 use super::test_client::{DeviceTestOptions, TestClient};
 use nabto_webrtc_sdk::device::{
-    ConnectionState, DeviceEvent, SignalingDevice, SignalingDeviceOptions,
+    ConnectionState, DeviceEvent, SignalingDevice, SignalingDeviceOptions, WebSocketHandle,
 };
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -23,6 +23,7 @@ pub struct DeviceTestInstance {
 pub struct DeviceHandle {
     state_rx: Arc<TokioMutex<tokio::sync::watch::Receiver<ConnectionState>>>,
     stop_tx: Arc<TokioMutex<Option<tokio::sync::oneshot::Sender<()>>>>,
+    command_tx: mpsc::Sender<nabto_webrtc_sdk::device::DeviceCommand>,
     _task: tokio::task::JoinHandle<()>,
 }
 
@@ -37,6 +38,14 @@ impl DeviceHandle {
         if let Some(tx) = self.stop_tx.lock().await.take() {
             let _ = tx.send(());
         }
+    }
+
+    /// Trigger check_alive on the device to detect stale connections
+    pub async fn check_alive(&self) -> Result<(), Box<dyn std::error::Error>> {
+        self.command_tx
+            .send(nabto_webrtc_sdk::device::DeviceCommand::CheckAlive)
+            .await
+            .map_err(|e| format!("Failed to send check_alive command: {}", e).into())
     }
 
     /// Wait for the device to reach a specific state
@@ -93,8 +102,14 @@ impl DeviceTestInstance {
     }
 
     /// Create a SignalingDevice configured for this test
-    /// Returns the device and a receiver for device events
-    pub fn create_signaling_device(&self) -> (SignalingDevice, mpsc::Receiver<DeviceEvent>) {
+    /// Returns the device, a receiver for device events, and a sender for device commands
+    pub fn create_signaling_device(
+        &self,
+    ) -> (
+        SignalingDevice,
+        mpsc::Receiver<DeviceEvent>,
+        mpsc::Sender<nabto_webrtc_sdk::device::DeviceCommand>,
+    ) {
         let access_token = self.access_token.clone();
 
         let token_generator = Box::new(move || {
@@ -119,10 +134,10 @@ impl DeviceTestInstance {
     /// Create and start a SignalingDevice, returning a handle to it
     /// The device will run in the background until stop() is called on the handle
     pub fn start_signaling_device(&self) -> (DeviceHandle, mpsc::Receiver<DeviceEvent>) {
-        let (mut device, mut event_rx_from_device) = self.create_signaling_device();
+        let (mut device, mut event_rx_from_device, command_tx) = self.create_signaling_device();
 
         // Create channels for state tracking and stop signal
-        let (state_tx, state_rx) = tokio::sync::watch::channel(device.connection_state());
+        let (state_tx, state_rx) = tokio::sync::watch::channel(ConnectionState::New);
         let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel();
 
         // Create a new event channel that we'll forward events to
@@ -163,6 +178,7 @@ impl DeviceTestInstance {
         let handle = DeviceHandle {
             state_rx: Arc::new(TokioMutex::new(state_rx)),
             stop_tx: Arc::new(TokioMutex::new(Some(stop_tx))),
+            command_tx,
             _task: task,
         };
 

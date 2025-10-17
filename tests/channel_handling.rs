@@ -61,12 +61,13 @@ async fn test_channel_creation_on_client_connect() {
             Ok(Some(event)) => {
                 match event {
                     DeviceEvent::NewChannel {
-                        channel,
+                        handle,
                         authorized,
+                        ..
                     } => {
                         println!(
                             "Received NewChannel event for channel {} (authorized: {})",
-                            channel.channel_id(),
+                            handle.channel_id(),
                             authorized
                         );
                         new_channel_received = true;
@@ -159,15 +160,16 @@ async fn test_multiple_channel_creation() {
         match tokio::time::timeout(Duration::from_millis(100), event_rx.recv()).await {
             Ok(Some(event)) => match event {
                 DeviceEvent::NewChannel {
-                    channel,
+                    handle,
                     authorized,
+                    ..
                 } => {
                     println!(
                         "Received NewChannel event for channel {} (authorized: {})",
-                        channel.channel_id(),
+                        handle.channel_id(),
                         authorized
                     );
-                    channel_ids.push(channel.channel_id().to_string());
+                    channel_ids.push(handle.channel_id().to_string());
                     channel_count += 1;
                 }
                 DeviceEvent::StateChanged { .. } => {}
