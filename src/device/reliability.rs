@@ -68,15 +68,25 @@ impl Reliability {
     /// Handle ACK message
     fn handle_ack(&mut self, seq: u32) {
         eprintln!("[RELIABILITY] Received ACK for seq {}", seq);
-        eprintln!("[RELIABILITY] Unacked queue has {} messages", self.unacked_messages.len());
+        eprintln!(
+            "[RELIABILITY] Unacked queue has {} messages",
+            self.unacked_messages.len()
+        );
         if let Some(ReliabilityMessage::Data { seq: first_seq, .. }) = self.unacked_messages.first()
         {
             eprintln!("[RELIABILITY] First unacked seq: {}", first_seq);
             if *first_seq == seq {
                 self.unacked_messages.remove(0);
-                eprintln!("[RELIABILITY] Removed message with seq {} from unacked queue. {} remaining", seq, self.unacked_messages.len());
+                eprintln!(
+                    "[RELIABILITY] Removed message with seq {} from unacked queue. {} remaining",
+                    seq,
+                    self.unacked_messages.len()
+                );
             } else {
-                eprintln!("[RELIABILITY] ACK seq {} doesn't match first unacked seq {}", seq, first_seq);
+                eprintln!(
+                    "[RELIABILITY] ACK seq {} doesn't match first unacked seq {}",
+                    seq, first_seq
+                );
             }
         } else {
             eprintln!("[RELIABILITY] No unacked messages to ACK");
@@ -110,7 +120,10 @@ impl Reliability {
 
     /// Called when websocket connects/reconnects - retransmit unacked messages
     pub fn handle_connect(&self) -> Vec<ReliabilityMessage> {
-        eprintln!("[RELIABILITY] handle_connect called, {} unacked messages", self.unacked_messages.len());
+        eprintln!(
+            "[RELIABILITY] handle_connect called, {} unacked messages",
+            self.unacked_messages.len()
+        );
         for (i, msg) in self.unacked_messages.iter().enumerate() {
             eprintln!("[RELIABILITY] Unacked message {}: {:?}", i, msg);
         }

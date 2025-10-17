@@ -435,10 +435,7 @@ async fn test_device_channel_close() {
 
     // Step 3: Close the channel
     // Use the handle's close method
-    handle
-        .close()
-        .await
-        .expect("Failed to close channel");
+    handle.close().await.expect("Failed to close channel");
 
     println!("✓ Channel close request sent");
 

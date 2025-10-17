@@ -312,7 +312,10 @@ async fn test_reliability_4_resend_messages_lost_on_stale_websocket() {
     let (signaling_channel, _message_rx) = wait_for_new_channel(&mut event_rx)
         .await
         .expect("Failed to get NewChannel event");
-    println!("[TEST4] Got NewChannel event, channel_id: {}", signaling_channel.channel_id());
+    println!(
+        "[TEST4] Got NewChannel event, channel_id: {}",
+        signaling_channel.channel_id()
+    );
 
     // Send initial message
     let initial_message = "1".to_string();
@@ -329,7 +332,10 @@ async fn test_reliability_4_resend_messages_lost_on_stale_websocket() {
         .await
         .expect("Failed to wait for initial message");
     assert_eq!(received_messages1, vec![initial_message.clone()]);
-    println!("[TEST4] Client received initial message: {:?}", received_messages1);
+    println!(
+        "[TEST4] Client received initial message: {:?}",
+        received_messages1
+    );
 
     // Let the websocket connection drop all further messages
     test.drop_device_messages()
@@ -355,15 +361,20 @@ async fn test_reliability_4_resend_messages_lost_on_stale_websocket() {
         .expect("Failed to call check_alive");
     println!("[TEST4] check_alive completed");
 
-
     // Wait for messages to be retransmitted after reconnection
     let all_expected_messages = [vec![initial_message], messages2].concat();
-    println!("[TEST4] Waiting for client to receive retransmitted messages: {:?}", all_expected_messages);
+    println!(
+        "[TEST4] Waiting for client to receive retransmitted messages: {:?}",
+        all_expected_messages
+    );
     let received_messages2 = test
         .client_wait_for_messages(&client_id, all_expected_messages.clone(), 10000)
         .await
         .expect("Failed to wait for retransmitted messages");
-    println!("[TEST4] Client received all messages: {:?}", received_messages2);
+    println!(
+        "[TEST4] Client received all messages: {:?}",
+        received_messages2
+    );
 
     assert_eq!(received_messages2, all_expected_messages);
     println!("[TEST4] Assertion passed - all messages received correctly");
@@ -544,9 +555,7 @@ async fn wait_for_new_channel(
     while start.elapsed() < timeout {
         match tokio::time::timeout(Duration::from_millis(100), event_rx.recv()).await {
             Ok(Some(DeviceEvent::NewChannel {
-                handle,
-                message_rx,
-                ..
+                handle, message_rx, ..
             })) => {
                 // Return the handle and message receiver directly from the event
                 return Ok((handle, message_rx));

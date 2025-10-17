@@ -1,7 +1,7 @@
 //! Device Message Transport implementation
 //!
 //! This module provides the DeviceMessageTransport, which sits on top of a
-//! SignalingChannel and handles:
+//! ChannelHandle and handles:
 //! - Message encoding/decoding for WebRTC signaling
 //! - Message signing/verification (JWT or None)
 //! - Channel setup (SETUP_REQUEST/RESPONSE exchange)
@@ -10,7 +10,7 @@
 use super::message_encoder::{IceServer, MessageEncoder, SignalingMessage, WebrtcSignalingMessage};
 use super::signing::{JwtMessageSigner, MessageSigner, NoneMessageSigner};
 use crate::device::routing::ErrorInfo;
-use crate::device::{SignalingChannel, SignalingService};
+use crate::device::ChannelHandle;
 use crate::{Error, Result};
 use serde_json::Value as JsonValue;
 use std::sync::{Arc, Mutex};
@@ -67,7 +67,7 @@ pub enum MessageTransportMode {
 
 /// Device message transport implementation
 pub struct DeviceMessageTransport {
-    channel: Arc<Mutex<SignalingChannel>>,
+    handle: ChannelHandle,
     encoder: MessageEncoder,
     signer: Arc<Mutex<Option<Box<dyn MessageSigner>>>>,
     state: Arc<Mutex<State>>,
@@ -78,17 +78,55 @@ pub struct DeviceMessageTransport {
 
 impl DeviceMessageTransport {
     /// Create a new DeviceMessageTransport
-    pub fn new(channel: SignalingChannel, options: DeviceMessageTransportOptions) -> Self {
+    ///
+    /// Takes a ChannelHandle for sending messages and a message receiver for receiving messages.
+    /// The transport will spawn a background task to process incoming messages.
+    pub fn new(
+        handle: ChannelHandle,
+        mut message_rx: mpsc::Receiver<JsonValue>,
+        options: DeviceMessageTransportOptions,
+    ) -> Self {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
 
-        Self {
-            channel: Arc::new(Mutex::new(channel)),
+        let transport = Self {
+            handle,
             encoder: MessageEncoder::new(),
             signer: Arc::new(Mutex::new(None)),
             state: Arc::new(Mutex::new(State::WaitFirstMessage)),
             options,
             event_tx,
             event_rx: Arc::new(Mutex::new(Some(event_rx))),
+        };
+
+        // Spawn a background task to handle incoming messages
+        let transport_clone = transport.clone_for_task();
+        tokio::spawn(async move {
+            while let Some(message) = message_rx.recv().await {
+                if let Err(e) = transport_clone
+                    .handle_channel_message_internal(message)
+                    .await
+                {
+                    eprintln!("Error handling channel message: {:?}", e);
+                    let _ = transport_clone
+                        .event_tx
+                        .send(DeviceTransportEvent::Error(e.to_string()));
+                }
+            }
+        });
+
+        transport
+    }
+
+    /// Clone the parts needed for the background task
+    fn clone_for_task(&self) -> Self {
+        Self {
+            handle: self.handle.clone(),
+            encoder: MessageEncoder::new(), // Create new encoder
+            signer: Arc::clone(&self.signer),
+            state: Arc::clone(&self.state),
+            options: self.options.clone(),
+            event_tx: self.event_tx.clone(),
+            event_rx: Arc::new(Mutex::new(None)), // Task doesn't need the receiver
         }
     }
 
@@ -125,7 +163,7 @@ impl DeviceMessageTransport {
     }
 
     /// Handle device setup request
-    async fn handle_device_setup_request<S: SignalingService>(&self, service: &S) -> Result<()> {
+    async fn handle_device_setup_request(&self) -> Result<()> {
         // Request ICE servers from the device
         // For now, we'll return None - the device implementation should provide this
         let ice_servers: Option<Vec<IceServer>> = None;
@@ -134,7 +172,7 @@ impl DeviceMessageTransport {
         let response = SignalingMessage::SetupResponse {
             ice_servers: ice_servers.clone(),
         };
-        self.send_signaling_message(&response, service).await?;
+        self.send_signaling_message(&response).await?;
 
         // Emit setup done event
         self.emit_setup_done(ice_servers).await;
@@ -143,18 +181,14 @@ impl DeviceMessageTransport {
     }
 
     /// Handle a signaling message
-    async fn handle_signaling_message<S: SignalingService>(
-        &self,
-        message: SignalingMessage,
-        service: &S,
-    ) -> Result<()> {
+    async fn handle_signaling_message(&self, message: SignalingMessage) -> Result<()> {
         let state = *self.state.lock().unwrap();
 
         match state {
             State::Setup => {
                 if message.is_setup_request() {
                     // Handle setup request
-                    self.handle_device_setup_request(service).await?;
+                    self.handle_device_setup_request().await?;
                 } else {
                     return Err(Error::Signaling(format!(
                         "Expected SETUP_REQUEST but got {:?}",
@@ -179,12 +213,8 @@ impl DeviceMessageTransport {
         Ok(())
     }
 
-    /// Handle a message from the signaling channel
-    pub async fn handle_channel_message<S: SignalingService>(
-        &self,
-        message: JsonValue,
-        service: &S,
-    ) -> Result<()> {
+    /// Handle a message from the signaling channel (internal version for background task)
+    async fn handle_channel_message_internal(&self, message: JsonValue) -> Result<()> {
         let state = *self.state.lock().unwrap();
 
         // Setup message signer on first message
@@ -209,14 +239,13 @@ impl DeviceMessageTransport {
         let decoded = self.encoder.decode(verified)?;
 
         // Handle the message
-        self.handle_signaling_message(decoded, service).await
+        self.handle_signaling_message(decoded).await
     }
 
     /// Send a WebRTC signaling message
-    pub async fn send_webrtc_signaling_message<S: SignalingService>(
+    pub async fn send_webrtc_signaling_message(
         &self,
         message: &WebrtcSignalingMessage,
-        service: &S,
     ) -> Result<()> {
         let state = *self.state.lock().unwrap();
 
@@ -236,15 +265,11 @@ impl DeviceMessageTransport {
             },
         };
 
-        self.send_signaling_message(&signaling_msg, service).await
+        self.send_signaling_message(&signaling_msg).await
     }
 
     /// Send a signaling message (internal)
-    async fn send_signaling_message<S: SignalingService>(
-        &self,
-        message: &SignalingMessage,
-        service: &S,
-    ) -> Result<()> {
+    async fn send_signaling_message(&self, message: &SignalingMessage) -> Result<()> {
         // Encode message
         let encoded = self.encoder.encode(message)?;
 
@@ -264,9 +289,8 @@ impl DeviceMessageTransport {
         let signed_json = serde_json::to_value(&signed)
             .map_err(|e| Error::Signaling(format!("Failed to serialize signed message: {}", e)))?;
 
-        // Send through channel
-        let mut channel = self.channel.lock().unwrap();
-        channel.send_message(signed_json, service)?;
+        // Send through channel handle
+        self.handle.send_message(signed_json).await?;
 
         Ok(())
     }
@@ -287,44 +311,41 @@ impl DeviceMessageTransport {
     }
 
     /// Emit error event
-    pub async fn emit_error<S: SignalingService>(&self, error: Error, service: &S) {
-        let channel = self.channel.lock().unwrap();
-
-        // Send error to client
+    pub async fn emit_error(&self, error: Error) {
+        // Send error to client via handle
         let error_info = ErrorInfo {
             code: "INTERNAL_ERROR".to_string(),
             message: Some(error.to_string()),
         };
-        service.send_error(channel.channel_id(), error_info);
+        let _ = self.handle.send_error(error_info).await;
 
         // Emit error event
         let _ = self
             .event_tx
             .send(DeviceTransportEvent::Error(error.to_string()));
     }
+
+    /// Get the channel ID
+    pub fn channel_id(&self) -> &str {
+        self.handle.channel_id()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::device::SignalingChannel;
-
-    #[allow(dead_code)] // Used in tests
-    struct MockService;
-
-    impl SignalingService for MockService {
-        fn send_routing_message(&self, _channel_id: &str, _message: JsonValue) {}
-        fn send_error(&self, _channel_id: &str, _error: ErrorInfo) {}
-        fn close_channel(&mut self, _channel_id: &str) {}
-    }
+    use crate::device::ChannelRequest;
 
     #[tokio::test]
     async fn test_transport_mode() {
-        let channel = SignalingChannel::new("test-channel".to_string());
+        let (tx, _rx) = mpsc::channel::<ChannelRequest>(32);
+        let handle = ChannelHandle::new("test-channel".to_string(), tx);
+        let (_msg_tx, msg_rx) = mpsc::channel::<JsonValue>(32);
+
         let options = DeviceMessageTransportOptions {
             security_mode: SecurityMode::None,
         };
-        let transport = DeviceMessageTransport::new(channel, options);
+        let transport = DeviceMessageTransport::new(handle, msg_rx, options);
 
         assert_eq!(transport.mode(), MessageTransportMode::Device);
     }

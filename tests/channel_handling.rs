@@ -61,9 +61,7 @@ async fn test_channel_creation_on_client_connect() {
             Ok(Some(event)) => {
                 match event {
                     DeviceEvent::NewChannel {
-                        handle,
-                        authorized,
-                        ..
+                        handle, authorized, ..
                     } => {
                         println!(
                             "Received NewChannel event for channel {} (authorized: {})",
@@ -160,9 +158,7 @@ async fn test_multiple_channel_creation() {
         match tokio::time::timeout(Duration::from_millis(100), event_rx.recv()).await {
             Ok(Some(event)) => match event {
                 DeviceEvent::NewChannel {
-                    handle,
-                    authorized,
-                    ..
+                    handle, authorized, ..
                 } => {
                     println!(
                         "Received NewChannel event for channel {} (authorized: {})",

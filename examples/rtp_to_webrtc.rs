@@ -20,8 +20,7 @@
 use anyhow::Result;
 use clap::Parser;
 use nabto_webrtc_sdk::device::{
-    DeviceTokenGenerator, ErrorInfo, SignalingChannel, SignalingDevice, SignalingDeviceOptions,
-    SignalingService,
+    ChannelHandle, DeviceTokenGenerator, SignalingDevice, SignalingDeviceOptions,
 };
 use nabto_webrtc_sdk::util::{
     DeviceMessageTransport, DeviceMessageTransportOptions, DeviceTransportEvent, SecurityMode,
@@ -34,6 +33,7 @@ use std::pin::Pin;
 use std::process;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
+use tokio::sync::mpsc;
 use webrtc::api::interceptor_registry::register_default_interceptors;
 use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_VP8};
 use webrtc::api::{APIBuilder, API};
@@ -47,31 +47,10 @@ use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
 use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
 use webrtc::track::track_local::{TrackLocal, TrackLocalWriter};
 
-// Note: This is a workaround. In production, we should pass the actual SignalingDevice
-// as the service so the DeviceMessageTransport can send messages back.
-// For now, we're using a dummy implementation since the messages aren't being sent back yet anyway.
-
-// Dummy SignalingService implementation for now
-// TODO: Replace with actual device reference
-struct DummyService;
-
-impl SignalingService for DummyService {
-    fn send_routing_message(&self, _channel_id: &str, _message: JsonValue) {
-        // TODO: Implement - would send message through SignalingDevice
-    }
-
-    fn send_error(&self, _channel_id: &str, _error: ErrorInfo) {
-        // TODO: Implement - would send error through SignalingDevice
-    }
-
-    fn close_channel(&mut self, _channel_id: &str) {
-        // TODO: Implement - would notify SignalingDevice to close channel
-    }
-}
-
 /// Handles a single WebRTC connection with signaling
 struct RtcConnectionHandler {
-    channel: SignalingChannel,
+    handle: ChannelHandle,
+    transport: DeviceMessageTransport,
     api: Arc<API>,
     video_track: Arc<TrackLocalStaticRTP>,
     peer_connection: Option<Arc<RTCPeerConnection>>,
@@ -80,15 +59,20 @@ struct RtcConnectionHandler {
 impl RtcConnectionHandler {
     /// Create a new RTC connection handler
     fn new(
-        channel: SignalingChannel,
+        handle: ChannelHandle,
+        message_rx: mpsc::Receiver<JsonValue>,
+        options: DeviceMessageTransportOptions,
         api: Arc<API>,
         video_track: Arc<TrackLocalStaticRTP>,
     ) -> Self {
-        let channel_id = channel.channel_id();
+        let channel_id = handle.channel_id().to_string();
         println!("[{}] Creating RTC connection handler", channel_id);
 
+        let transport = DeviceMessageTransport::new(handle.clone(), message_rx, options);
+
         Self {
-            channel,
+            handle,
+            transport,
             api,
             video_track,
             peer_connection: None,
@@ -100,7 +84,7 @@ impl RtcConnectionHandler {
         &mut self,
         ice_servers: Option<Vec<nabto_webrtc_sdk::util::IceServer>>,
     ) -> Result<()> {
-        let channel_id = self.channel.channel_id();
+        let channel_id = self.handle.channel_id();
 
         // Build ICE server configuration
         let mut rtc_ice_servers = vec![RTCIceServer {
@@ -151,26 +135,11 @@ impl RtcConnectionHandler {
     }
 
     /// Run the connection handler
-    async fn run<S: SignalingService + Send + 'static>(
-        mut self,
-        _service: Arc<tokio::sync::Mutex<S>>,
-        shared_secret: Option<String>,
-    ) -> Result<()> {
-        let channel_id = self.channel.channel_id().to_string();
+    async fn run(mut self) -> Result<()> {
+        let channel_id = self.handle.channel_id().to_string();
 
-        // Create message transport with security mode
-        let security_mode = if let Some(secret) = shared_secret {
-            SecurityMode::SharedSecret {
-                callback: Arc::new(move |_key_id| Ok(secret.clone())),
-            }
-        } else {
-            SecurityMode::None
-        };
-
-        let transport_options = DeviceMessageTransportOptions { security_mode };
-        let transport = DeviceMessageTransport::new(self.channel.clone(), transport_options);
-
-        let mut event_rx = transport
+        let mut event_rx = self
+            .transport
             .take_event_receiver()
             .ok_or_else(|| anyhow::anyhow!("Failed to get event receiver"))?;
 
@@ -206,7 +175,7 @@ impl RtcConnectionHandler {
 
     /// Handle WebRTC signaling messages (SDP offer/answer, ICE candidates)
     async fn handle_webrtc_message(&mut self, msg: WebrtcSignalingMessage) -> Result<()> {
-        let channel_id = self.channel.channel_id();
+        let channel_id = self.handle.channel_id();
 
         // Check if peer connection is ready
         let peer_connection = self
@@ -395,8 +364,8 @@ async fn main() -> Result<()> {
             match event {
                 nabto_webrtc_sdk::device::DeviceEvent::NewChannel {
                     handle,
+                    message_rx,
                     authorized,
-                    ..
                 } => {
                     println!("New signaling channel received!");
                     println!("  Channel ID: {}", handle.channel_id());
@@ -425,21 +394,30 @@ async fn main() -> Result<()> {
                     let shared_secret_clone = shared_secret_for_task.clone();
 
                     tokio::spawn(async move {
-                        // TODO: This example needs to be refactored to use the new ChannelHandle API
-                        // instead of SignalingChannel directly. For now, it's temporarily broken
-                        // because RtcConnectionHandler and DeviceMessageTransport need to be updated
-                        // to work with the new handle-based API.
-                        //
-                        // The proper solution would be:
-                        // 1. Update DeviceMessageTransport to accept ChannelHandle + message_rx
-                        // 2. Update RtcConnectionHandler to use ChannelHandle
-                        // 3. Remove dependency on SignalingChannel from this example
+                        // Create message transport with security mode
+                        let security_mode = if let Some(secret) = shared_secret_clone {
+                            SecurityMode::SharedSecret {
+                                callback: Arc::new(move |_key_id| Ok(secret.clone())),
+                            }
+                        } else {
+                            SecurityMode::None
+                        };
 
-                        eprintln!("TODO: rtp_to_webrtc example needs refactoring for new ChannelHandle API");
-                        eprintln!("Channel ID: {}", handle.channel_id());
+                        let transport_options = DeviceMessageTransportOptions { security_mode };
 
-                        // Placeholder to use variables
-                        let _ = (handle, api_clone, video_track_clone, shared_secret_clone);
+                        // Create RTC connection handler with the transport
+                        let handler = RtcConnectionHandler::new(
+                            handle,
+                            message_rx,
+                            transport_options,
+                            api_clone,
+                            video_track_clone,
+                        );
+                        println!("RTC connection handler created");
+
+                        if let Err(e) = handler.run().await {
+                            eprintln!("Connection handler error: {}", e);
+                        }
                     });
                 }
                 nabto_webrtc_sdk::device::DeviceEvent::StateChanged {

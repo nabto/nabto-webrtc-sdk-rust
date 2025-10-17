@@ -13,8 +13,7 @@ mod token;
 
 // Re-export public types
 pub use channel::{
-    ChannelHandle, ChannelRequest, SignalingChannel, SignalingChannelEventHandler,
-    SignalingService,
+    ChannelHandle, ChannelRequest, SignalingChannel, SignalingChannelEventHandler, SignalingService,
 };
 pub use connection::{ConnectionEvent, WebSocketConfig, WebSocketConnection, WebSocketHandle};
 pub use http::IceServer;
@@ -74,9 +73,7 @@ impl std::fmt::Debug for DeviceEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             DeviceEvent::NewChannel {
-                handle,
-                authorized,
-                ..
+                handle, authorized, ..
             } => f
                 .debug_struct("NewChannel")
                 .field("channel_id", &handle.channel_id())
@@ -385,7 +382,10 @@ impl SignalingDevice {
     fn retransmit_unacked_messages(&mut self) {
         let channel_ids: Vec<String> = self.channels.keys().cloned().collect();
 
-        eprintln!("[RETRANSMIT] Retransmitting unacked messages for {} channels", channel_ids.len());
+        eprintln!(
+            "[RETRANSMIT] Retransmitting unacked messages for {} channels",
+            channel_ids.len()
+        );
 
         for channel_id in channel_ids {
             eprintln!("[RETRANSMIT] Processing channel: {}", channel_id);
@@ -594,7 +594,8 @@ impl SignalingDevice {
                     self.channels.insert(channel_id.clone(), channel_with_rx);
 
                     // Create a handle for the channel (lightweight, can be cloned)
-                    let handle = ChannelHandle::new(channel_id.clone(), self.channel_request_tx.clone());
+                    let handle =
+                        ChannelHandle::new(channel_id.clone(), self.channel_request_tx.clone());
 
                     // Emit NewChannel event after adding to map
                     // The message_rx is sent along with the handle so tests can receive messages

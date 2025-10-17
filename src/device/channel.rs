@@ -227,15 +227,25 @@ impl SignalingChannel {
     /// Handle WebSocket reconnection - retransmit unacked messages
     pub fn handle_websocket_reconnect<S: SignalingService>(&mut self, service: &S) {
         if self.state == ChannelState::Closed || self.state == ChannelState::Failed {
-            eprintln!("[CHANNEL {}] Skipping retransmit - channel state: {:?}", self.channel_id, self.state);
+            eprintln!(
+                "[CHANNEL {}] Skipping retransmit - channel state: {:?}",
+                self.channel_id, self.state
+            );
             return;
         }
 
         let messages = self.reliability.handle_connect();
-        eprintln!("[CHANNEL {}] Retransmitting {} unacked messages", self.channel_id, messages.len());
+        eprintln!(
+            "[CHANNEL {}] Retransmitting {} unacked messages",
+            self.channel_id,
+            messages.len()
+        );
 
         for msg in messages {
-            eprintln!("[CHANNEL {}] Retransmitting message: {:?}", self.channel_id, msg);
+            eprintln!(
+                "[CHANNEL {}] Retransmitting message: {:?}",
+                self.channel_id, msg
+            );
             if let Ok(json) = serde_json::to_value(&msg) {
                 service.send_routing_message(&self.channel_id, json);
             }

@@ -103,9 +103,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         while let Some(event) = event_rx.recv().await {
             match event {
                 nabto_webrtc_sdk::device::DeviceEvent::NewChannel {
-                    handle,
-                    authorized,
-                    ..
+                    handle, authorized, ..
                 } => {
                     println!("📡 New channel received!");
                     println!("   Channel ID: {}", handle.channel_id());
