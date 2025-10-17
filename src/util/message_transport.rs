@@ -331,6 +331,13 @@ impl DeviceMessageTransport {
     }
 }
 
+// Manual Clone implementation for DeviceMessageTransport
+impl Clone for DeviceMessageTransport {
+    fn clone(&self) -> Self {
+        self.clone_for_task()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

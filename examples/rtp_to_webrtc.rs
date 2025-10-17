@@ -54,6 +54,9 @@ struct RtcConnectionHandler {
     api: Arc<API>,
     video_track: Arc<TrackLocalStaticRTP>,
     peer_connection: Option<Arc<RTCPeerConnection>>,
+    // Perfect negotiation state
+    making_offer: Arc<tokio::sync::Mutex<bool>>,
+    ignore_offer: Arc<tokio::sync::Mutex<bool>>,
 }
 
 impl RtcConnectionHandler {
@@ -76,6 +79,8 @@ impl RtcConnectionHandler {
             api,
             video_track,
             peer_connection: None,
+            making_offer: Arc::new(tokio::sync::Mutex::new(false)),
+            ignore_offer: Arc::new(tokio::sync::Mutex::new(false)),
         }
     }
 
@@ -130,6 +135,52 @@ impl RtcConnectionHandler {
             },
         ));
 
+        // Set up negotiation needed handler (perfect negotiation - polite peer)
+        let pc_clone = Arc::clone(&peer_connection);
+        let transport_clone = self.transport.clone();
+        let making_offer_clone = Arc::clone(&self.making_offer);
+        let channel_id_for_negotiation = channel_id.to_string();
+
+        peer_connection.on_negotiation_needed(Box::new(move || {
+            let pc = Arc::clone(&pc_clone);
+            let transport = transport_clone.clone();
+            let making_offer = Arc::clone(&making_offer_clone);
+            let channel_id = channel_id_for_negotiation.clone();
+
+            Box::pin(async move {
+                println!("[{}] Negotiation needed - creating offer", channel_id);
+
+                *making_offer.lock().await = true;
+
+                // Create and set local description (offer)
+                if let Ok(offer) = pc.create_offer(None).await {
+                    if let Err(e) = pc.set_local_description(offer.clone()).await {
+                        eprintln!("[{}] Failed to set local description: {}", channel_id, e);
+                        *making_offer.lock().await = false;
+                        return;
+                    }
+
+                    // Send offer through transport
+                    let desc = nabto_webrtc_sdk::util::SessionDescription {
+                        desc_type: "offer".to_string(),
+                        sdp: offer.sdp,
+                    };
+
+                    let msg = WebrtcSignalingMessage::Description { description: desc };
+
+                    if let Err(e) = transport.send_webrtc_signaling_message(&msg).await {
+                        eprintln!("[{}] Failed to send offer: {}", channel_id, e);
+                    } else {
+                        println!("[{}] Sent offer to client", channel_id);
+                    }
+                } else {
+                    eprintln!("[{}] Failed to create offer", channel_id);
+                }
+
+                *making_offer.lock().await = false;
+            })
+        }));
+
         self.peer_connection = Some(peer_connection);
         Ok(())
     }
@@ -174,6 +225,7 @@ impl RtcConnectionHandler {
     }
 
     /// Handle WebRTC signaling messages (SDP offer/answer, ICE candidates)
+    /// Implements perfect negotiation pattern (device is polite peer)
     async fn handle_webrtc_message(&mut self, msg: WebrtcSignalingMessage) -> Result<()> {
         let channel_id = self.handle.channel_id();
 
@@ -186,37 +238,83 @@ impl RtcConnectionHandler {
         match msg {
             WebrtcSignalingMessage::Description { description } => {
                 println!(
-                    "[{}] Received SDP description: {:?}",
+                    "[{}] Received SDP description: {}",
                     channel_id, description.desc_type
                 );
 
-                // Set remote description (client's offer)
-                let remote_desc = RTCSessionDescription::offer(description.sdp)?;
+                let is_offer = description.desc_type == "offer";
+
+                // Perfect negotiation: Check for collision
+                let making_offer = *self.making_offer.lock().await;
+                let mut ignore_offer_guard = self.ignore_offer.lock().await;
+                *ignore_offer_guard = is_offer && making_offer;
+
+                if *ignore_offer_guard {
+                    println!(
+                        "[{}] Ignoring offer due to collision (polite peer)",
+                        channel_id
+                    );
+                    return Ok(());
+                }
+
+                // Set remote description
+                let remote_desc = if is_offer {
+                    RTCSessionDescription::offer(description.sdp.clone())?
+                } else {
+                    RTCSessionDescription::answer(description.sdp.clone())?
+                };
+
                 peer_connection.set_remote_description(remote_desc).await?;
+                println!(
+                    "[{}] Set remote description ({})",
+                    channel_id, description.desc_type
+                );
 
-                // Create answer
-                let answer = peer_connection.create_answer(None).await?;
+                // If it's an offer, create and send answer
+                if is_offer {
+                    let answer = peer_connection.create_answer(None).await?;
+                    peer_connection
+                        .set_local_description(answer.clone())
+                        .await?;
+                    println!(
+                        "[{}] Created and set local description (answer)",
+                        channel_id
+                    );
 
-                // Set local description
-                peer_connection
-                    .set_local_description(answer.clone())
-                    .await?;
+                    // Send answer back through transport
+                    let desc = nabto_webrtc_sdk::util::SessionDescription {
+                        desc_type: "answer".to_string(),
+                        sdp: answer.sdp,
+                    };
 
-                println!("[{}] Created and set SDP answer", channel_id);
+                    let response_msg = WebrtcSignalingMessage::Description { description: desc };
 
-                // TODO: Send answer back through transport
-                println!("[{}] TODO: Send SDP answer to client", channel_id);
+                    self.transport
+                        .send_webrtc_signaling_message(&response_msg)
+                        .await?;
+                    println!("[{}] Sent answer to client", channel_id);
+                }
             }
             WebrtcSignalingMessage::Candidate { candidate } => {
                 println!(
-                    "[{}] Received ICE candidate: {:?}",
+                    "[{}] Received ICE candidate: {}",
                     channel_id, candidate.candidate
                 );
-                // TODO: Add ICE candidate to peer connection
-                println!(
-                    "[{}] TODO: Add ICE candidate to peer connection",
-                    channel_id
-                );
+
+                // Add ICE candidate to peer connection
+                if let Err(e) = peer_connection
+                    .add_ice_candidate(webrtc::ice_transport::ice_candidate::RTCIceCandidateInit {
+                        candidate: candidate.candidate,
+                        sdp_mid: candidate.sdp_mid,
+                        sdp_mline_index: candidate.sdp_m_line_index.map(|i| i as u16),
+                        username_fragment: None,
+                    })
+                    .await
+                {
+                    eprintln!("[{}] Failed to add ICE candidate: {}", channel_id, e);
+                } else {
+                    println!("[{}] Added ICE candidate", channel_id);
+                }
             }
         }
 
