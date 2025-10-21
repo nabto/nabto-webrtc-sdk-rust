@@ -93,10 +93,7 @@ impl RtcConnectionHandler {
         let channel_id = self.handle.channel_id();
 
         // Build ICE server configuration
-        let mut rtc_ice_servers = vec![RTCIceServer {
-            urls: vec!["stun:stun.l.google.com:19302".to_owned()],
-            ..Default::default()
-        }];
+        let mut rtc_ice_servers = vec![];
 
         // Add ICE servers from the signaling service if provided
         if let Some(servers) = ice_servers {
