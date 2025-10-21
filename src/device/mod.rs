@@ -16,12 +16,11 @@ pub use channel::{
     ChannelHandle, ChannelRequest, SignalingChannel, SignalingChannelEventHandler, SignalingService,
 };
 pub use connection::{ConnectionEvent, WebSocketConfig, WebSocketConnection, WebSocketHandle};
-pub use http::IceServer;
+pub use http::{HttpApi, IceServer};
 pub use routing::ErrorInfo; // Re-export ErrorInfo for use with SignalingService
 pub use state::{ChannelState, ConnectionState};
 pub use token::DeviceTokenGenerator;
 
-use http::HttpApi;
 use routing::RoutingMessage;
 
 use crate::{Error, Result};

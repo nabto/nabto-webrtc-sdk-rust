@@ -20,7 +20,7 @@
 use anyhow::Result;
 use clap::Parser;
 use nabto_webrtc_sdk::device::{
-    ChannelHandle, DeviceTokenGenerator, SignalingDevice, SignalingDeviceOptions,
+    ChannelHandle, DeviceTokenGenerator, HttpApi, SignalingDevice, SignalingDeviceOptions,
 };
 use nabto_webrtc_sdk::util::{
     DeviceMessageTransport, DeviceMessageTransportOptions, DeviceTransportEvent, SecurityMode,
@@ -33,10 +33,11 @@ use std::pin::Pin;
 use std::process;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
-use tokio::sync::mpsc;
-use webrtc::api::interceptor_registry::{configure_rtcp_reports, configure_twcc_receiver_only, register_default_interceptors};
+use tokio::sync::{mpsc, Mutex};
+use webrtc::api::interceptor_registry::{configure_rtcp_reports, configure_twcc_receiver_only};
 use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_VP8};
 use webrtc::api::{APIBuilder, API};
+use webrtc::ice_transport::ice_credential_type::RTCIceCredentialType;
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::interceptor::registry::Registry;
 use webrtc::peer_connection::configuration::RTCConfiguration;
@@ -100,21 +101,53 @@ impl RtcConnectionHandler {
         // Add ICE servers from the signaling service if provided
         if let Some(servers) = ice_servers {
             for server in servers {
-                rtc_ice_servers.push(RTCIceServer {
-                    urls: server.urls,
-                    username: server.username.unwrap_or_default(),
-                    credential: server.credential.unwrap_or_default(),
-                    ..Default::default()
-                });
+                // Only add servers that have the required credentials for TURN
+                // or are STUN servers (no credentials needed)
+                let is_turn = server.urls.iter().any(|url| url.starts_with("turn:") || url.starts_with("turns:"));
+
+                if is_turn && (server.username.is_none() || server.credential.is_none()) {
+                    eprintln!("[{}] Skipping TURN server with missing credentials: {:?}", channel_id, server);
+                    continue;
+                }
+
+                // Set credential type to Password for TURN servers with credentials
+                let credential_type = if is_turn {
+                    RTCIceCredentialType::Password
+                } else {
+                    RTCIceCredentialType::Unspecified
+                };
+
+                let rtc_server = RTCIceServer {
+                    urls: server.urls.clone(),
+                    username: server.username.clone().unwrap_or_default(),
+                    credential: server.credential.clone().unwrap_or_default(),
+                    credential_type,
+                };
+
+                println!("[{}] Adding ICE server - urls: {:?}, username: '{}', credential: '{}', type: {:?}",
+                    channel_id, rtc_server.urls, rtc_server.username, rtc_server.credential, rtc_server.credential_type);
+
+                rtc_ice_servers.push(rtc_server);
             }
         }
 
         let config = RTCConfiguration {
-            ice_servers: rtc_ice_servers,
+            ice_servers: rtc_ice_servers.clone(),
             ..Default::default()
         };
 
-        let peer_connection = Arc::new(self.api.new_peer_connection(config).await?);
+        println!("[{}] Creating peer connection with {} ICE servers", channel_id, rtc_ice_servers.len());
+        let peer_connection = match self.api.new_peer_connection(config).await {
+            Ok(pc) => {
+                println!("[{}] Successfully created peer connection", channel_id);
+                Arc::new(pc)
+            }
+            Err(e) => {
+                eprintln!("[{}] Failed to create peer connection: {}", channel_id, e);
+                eprintln!("[{}] ICE servers were: {:?}", channel_id, rtc_ice_servers);
+                return Err(e.into());
+            }
+        };
         println!("[{}] Created peer connection", channel_id);
 
         // Add video track to peer connection
@@ -434,9 +467,10 @@ async fn main() -> Result<()> {
         }) as Pin<Box<dyn Future<Output = Result<String, nabto_webrtc_sdk::Error>> + Send>>
     });
 
-    // Clone for later use in URL printing
+    // Clone for later use in URL printing and ICE server provider
     let product_id_for_url = product_id.clone();
     let device_id_for_url = device_id.clone();
+    let endpoint_url_opt = args.endpoint.clone();
 
     // Create signaling device options
     let options = SignalingDeviceOptions {
@@ -447,11 +481,64 @@ async fn main() -> Result<()> {
     };
 
     // Create the signaling device
-    let (mut device, mut event_rx, _command_tx) = SignalingDevice::new(options);
+    let (device, mut event_rx, _command_tx) = SignalingDevice::new(options);
 
     println!("SignalingDevice created");
     println!("Connection state: {:?}", device.connection_state());
     println!();
+
+    // Create an ICE server provider that uses HTTP API directly
+    // This avoids the deadlock by not requiring the device lock
+    let endpoint_url = endpoint_url_opt.unwrap_or_else(|| {
+        format!("https://{}.webrtc.nabto.net", product_id_for_url)
+    });
+
+    // Clone values needed for ICE server provider
+    let product_id_for_ice = product_id_for_url.clone();
+    let device_id_for_ice = device_id_for_url.clone();
+    let endpoint_url_for_ice = endpoint_url.clone();
+
+    // Clone the private key for the ICE server token generator
+    let private_key_for_ice = fs::read_to_string(&private_key_file)?;
+
+    let ice_server_provider_fn = Arc::new(move || {
+        let product_id = product_id_for_ice.clone();
+        let device_id = device_id_for_ice.clone();
+        let endpoint_url = endpoint_url_for_ice.clone();
+        let private_key = private_key_for_ice.clone();
+
+        Box::pin(async move {
+            // Create HTTP API client
+            let http_api = HttpApi::new(
+                endpoint_url,
+                product_id.clone(),
+                device_id.clone(),
+            );
+
+            // Generate token
+            let token_gen = DeviceTokenGenerator::new(product_id, device_id, private_key);
+            let token = token_gen.generate_token()
+                .map_err(|e| nabto_webrtc_sdk::Error::Other(format!("Token generation failed: {}", e)))?;
+
+            // Request ICE servers
+            let http_servers = http_api.request_ice_servers(&token).await?;
+
+            // Convert to signaling protocol format
+            let ice_servers = http_servers
+                .into_iter()
+                .map(|s| nabto_webrtc_sdk::util::IceServer {
+                    urls: s.urls,
+                    username: s.username,
+                    credential: s.credential,
+                })
+                .collect();
+
+            Ok(ice_servers)
+        }) as Pin<Box<dyn Future<Output = Result<Vec<nabto_webrtc_sdk::util::IceServer>, nabto_webrtc_sdk::Error>> + Send>>
+    }) as Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<Vec<nabto_webrtc_sdk::util::IceServer>, nabto_webrtc_sdk::Error>> + Send>> + Send + Sync>;
+
+    // Wrap device in Arc<Mutex> only for the run loop
+    let device = Arc::new(Mutex::new(device));
 
     // Spawn a task to handle device events
     let shared_secret_for_task = shared_secret.clone();
@@ -490,6 +577,7 @@ async fn main() -> Result<()> {
                     let api_clone = api_for_task.clone();
                     let video_track_clone = Arc::clone(&video_track_for_task);
                     let shared_secret_clone = shared_secret_for_task.clone();
+                    let ice_server_provider_clone = Arc::clone(&ice_server_provider_fn);
 
                     tokio::spawn(async move {
                         // Create message transport with security mode
@@ -501,7 +589,13 @@ async fn main() -> Result<()> {
                             SecurityMode::None
                         };
 
-                        let transport_options = DeviceMessageTransportOptions { security_mode };
+                        // Use the pre-created ICE server provider (no device lock needed!)
+                        let ice_server_provider = Some(ice_server_provider_clone);
+
+                        let transport_options = DeviceMessageTransportOptions {
+                            security_mode,
+                            ice_server_provider,
+                        };
 
                         // Create RTC connection handler with the transport
                         let handler = RtcConnectionHandler::new(
@@ -561,6 +655,7 @@ async fn main() -> Result<()> {
 
     // Spawn the device run loop
     let device_task = tokio::spawn(async move {
+        let mut device = device.lock().await;
         if let Err(e) = device.run().await {
             eprintln!("Device error: {:?}", e);
             process::exit(1);

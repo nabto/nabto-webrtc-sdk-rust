@@ -13,6 +13,8 @@ use crate::device::routing::ErrorInfo;
 use crate::device::ChannelHandle;
 use crate::{Error, Result};
 use serde_json::Value as JsonValue;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
@@ -28,10 +30,15 @@ pub enum SecurityMode {
     },
 }
 
+/// Callback type for requesting ICE servers
+pub type IceServerProvider = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<Vec<IceServer>>> + Send>> + Send + Sync>;
+
 /// Device message transport options
 #[derive(Clone)]
 pub struct DeviceMessageTransportOptions {
     pub security_mode: SecurityMode,
+    /// Optional callback to request ICE servers from the signaling service
+    pub ice_server_provider: Option<IceServerProvider>,
 }
 
 /// Events emitted by the DeviceMessageTransport
@@ -164,9 +171,18 @@ impl DeviceMessageTransport {
 
     /// Handle device setup request
     async fn handle_device_setup_request(&self) -> Result<()> {
-        // Request ICE servers from the device
-        // For now, we'll return None - the device implementation should provide this
-        let ice_servers: Option<Vec<IceServer>> = None;
+        // Request ICE servers from the signaling service if provider is available
+        let ice_servers = if let Some(ref provider) = self.options.ice_server_provider {
+            match provider().await {
+                Ok(servers) => Some(servers),
+                Err(e) => {
+                    eprintln!("Failed to request ICE servers: {:?}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
         // Send SETUP_RESPONSE
         let response = SignalingMessage::SetupResponse {
@@ -351,6 +367,7 @@ mod tests {
 
         let options = DeviceMessageTransportOptions {
             security_mode: SecurityMode::None,
+            ice_server_provider: None,
         };
         let transport = DeviceMessageTransport::new(handle, msg_rx, options);
 
