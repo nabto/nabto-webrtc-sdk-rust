@@ -147,12 +147,6 @@ impl RtcConnectionHandler {
         };
         println!("[{}] Created peer connection", channel_id);
 
-        // Add video track to peer connection
-        let _rtp_sender = peer_connection
-            .add_track(Arc::clone(&self.video_track) as Arc<dyn TrackLocal + Send + Sync>)
-            .await?;
-        println!("[{}] Added video track to peer connection", channel_id);
-
         // Set up peer connection state change handler
         let channel_id_for_state = channel_id.to_string();
         peer_connection.on_peer_connection_state_change(Box::new(
@@ -164,6 +158,47 @@ impl RtcConnectionHandler {
                 Box::pin(async {})
             },
         ));
+
+        // Set up ICE candidate handler to send discovered candidates to remote peer
+        let transport_for_ice = self.transport.clone();
+        let channel_id_for_ice = channel_id.to_string();
+
+        peer_connection.on_ice_candidate(Box::new(move |candidate| {
+            let transport = transport_for_ice.clone();
+            let channel_id = channel_id_for_ice.clone();
+
+            Box::pin(async move {
+                if let Some(candidate) = candidate {
+                    // Convert RTCIceCandidate to JSON to get the candidate string
+                    match candidate.to_json() {
+                        Ok(candidate_init) => {
+                            println!("[{}] Discovered local ICE candidate: {}", channel_id, candidate_init.candidate);
+
+                            // Send candidate to remote peer
+                            let ice_candidate = nabto_webrtc_sdk::util::IceCandidate {
+                                candidate: candidate_init.candidate,
+                                sdp_mid: candidate_init.sdp_mid,
+                                sdp_m_line_index: candidate_init.sdp_mline_index.map(|i| i as u32),
+                                username_fragment: candidate_init.username_fragment,
+                            };
+
+                            let msg = WebrtcSignalingMessage::Candidate { candidate: ice_candidate };
+
+                            if let Err(e) = transport.send_webrtc_signaling_message(&msg).await {
+                                eprintln!("[{}] Failed to send ICE candidate: {}", channel_id, e);
+                            } else {
+                                println!("[{}] Sent ICE candidate to remote peer", channel_id);
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("[{}] Failed to convert ICE candidate to JSON: {}", channel_id, e);
+                        }
+                    }
+                } else {
+                    println!("[{}] ICE gathering complete", channel_id);
+                }
+            })
+        }));
 
         // Set up negotiation needed handler (perfect negotiation - polite peer)
         let pc_clone = Arc::clone(&peer_connection);
@@ -210,6 +245,14 @@ impl RtcConnectionHandler {
                 *making_offer.lock().await = false;
             })
         }));
+
+        // Add video track to peer connection
+        // IMPORTANT: This must be done AFTER setting up all handlers, especially on_negotiation_needed
+        // Otherwise the negotiation needed event will fire before we're listening for it
+        let _rtp_sender = peer_connection
+            .add_track(Arc::clone(&self.video_track) as Arc<dyn TrackLocal + Send + Sync>)
+            .await?;
+        println!("[{}] Added video track to peer connection", channel_id);
 
         self.peer_connection = Some(peer_connection);
         Ok(())
