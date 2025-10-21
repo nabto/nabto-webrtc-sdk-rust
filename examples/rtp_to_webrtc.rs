@@ -34,7 +34,7 @@ use std::process;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
-use webrtc::api::interceptor_registry::register_default_interceptors;
+use webrtc::api::interceptor_registry::{configure_rtcp_reports, configure_twcc_receiver_only, register_default_interceptors};
 use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_VP8};
 use webrtc::api::{APIBuilder, API};
 use webrtc::ice_transport::ice_server::RTCIceServer;
@@ -392,7 +392,7 @@ async fn main() -> Result<()> {
     media_engine.register_default_codecs()?;
 
     let mut registry = Registry::new();
-    registry = register_default_interceptors(registry, &mut media_engine)?;
+    registry = register_interceptors(registry, &mut media_engine)?;
 
     let api = Arc::new(
         APIBuilder::new()
@@ -600,3 +600,41 @@ async fn main() -> Result<()> {
 
     Ok(())
 }
+
+pub fn register_interceptors(
+    mut registry: Registry,
+    media_engine: &mut MediaEngine,
+) -> Result<Registry> {
+
+    //registry = configure_nack(registry, media_engine);
+
+    registry = configure_rtcp_reports(registry);
+
+    registry = configure_twcc_receiver_only(registry, media_engine)?;
+
+    Ok(registry)
+}
+
+// /// configure_nack will setup everything necessary for handling generating/responding to nack messages.
+// pub fn configure_nack(mut registry: Registry, media_engine: &mut MediaEngine) -> Registry {
+//     media_engine.register_feedback(
+//         RTCPFeedback {
+//             typ: "nack".to_owned(),
+//             parameter: "".to_owned(),
+//         },
+//         RTPCodecType::Video,
+//     );
+//     media_engine.register_feedback(
+//         RTCPFeedback {
+//             typ: "nack".to_owned(),
+//             parameter: "pli".to_owned(),
+//         },
+//         RTPCodecType::Video,
+//     );
+
+//     let generator = Box::new(Generator::builder());
+//     let responder = Box::new(Responder::builder());
+//     //registry.add(responder);
+//     registry.add(generator);
+//     registry
+// }
