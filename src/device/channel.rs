@@ -84,10 +84,10 @@ impl ChannelHandle {
 /// Trait for SignalingChannel to communicate with SignalingDevice
 pub trait SignalingService {
     /// Send a routing message on this channel
-    fn send_routing_message(&self, channel_id: &str, message: JsonValue);
+    fn send_routing_message(&self, channel_id: &str, message: JsonValue) -> impl std::future::Future<Output = ()> + Send;
 
     /// Send an error message for this channel
-    fn send_error(&self, channel_id: &str, error: ErrorInfo);
+    fn send_error(&self, channel_id: &str, error: ErrorInfo) -> impl std::future::Future<Output = ()> + Send;
 
     /// Notify device that this channel is being closed
     fn close_channel(&mut self, channel_id: &str);
@@ -191,7 +191,7 @@ impl SignalingChannel {
     }
 
     /// Handle an incoming routing message
-    pub fn handle_routing_message<S: SignalingService>(
+    pub async fn handle_routing_message<S: SignalingService>(
         &mut self,
         message: JsonValue,
         service: &S,
@@ -217,7 +217,7 @@ impl SignalingChannel {
                 let ack = self.reliability.create_ack(seq);
                 let ack_json = serde_json::to_value(&ack)
                     .map_err(|e| Error::Signaling(format!("Failed to serialize ACK: {}", e)))?;
-                service.send_routing_message(&self.channel_id, ack_json);
+                service.send_routing_message(&self.channel_id, ack_json).await;
             }
         }
 
@@ -225,7 +225,7 @@ impl SignalingChannel {
     }
 
     /// Handle WebSocket reconnection - retransmit unacked messages
-    pub fn handle_websocket_reconnect<S: SignalingService>(&mut self, service: &S) {
+    pub async fn handle_websocket_reconnect<S: SignalingService>(&mut self, service: &S) {
         if self.state == ChannelState::Closed || self.state == ChannelState::Failed {
             eprintln!(
                 "[CHANNEL {}] Skipping retransmit - channel state: {:?}",
@@ -247,13 +247,13 @@ impl SignalingChannel {
                 self.channel_id, msg
             );
             if let Ok(json) = serde_json::to_value(&msg) {
-                service.send_routing_message(&self.channel_id, json);
+                service.send_routing_message(&self.channel_id, json).await;
             }
         }
     }
 
     /// Handle peer connected notification
-    pub fn handle_peer_connected<S: SignalingService>(&mut self, service: &S) {
+    pub async fn handle_peer_connected<S: SignalingService>(&mut self, service: &S) {
         if self.state == ChannelState::Closed || self.state == ChannelState::Failed {
             return;
         }
@@ -263,7 +263,7 @@ impl SignalingChannel {
         // Retransmit unacked messages
         for msg in self.reliability.handle_peer_connected() {
             if let Ok(json) = serde_json::to_value(&msg) {
-                service.send_routing_message(&self.channel_id, json);
+                service.send_routing_message(&self.channel_id, json).await;
             }
         }
     }
@@ -287,7 +287,7 @@ impl SignalingChannel {
     }
 
     /// Send a message to the other peer
-    pub fn send_message<S: SignalingService>(
+    pub async fn send_message<S: SignalingService>(
         &mut self,
         message: JsonValue,
         service: &S,
@@ -302,13 +302,13 @@ impl SignalingChannel {
         let json = serde_json::to_value(&rel_msg)
             .map_err(|e| Error::Signaling(format!("Failed to serialize message: {}", e)))?;
 
-        service.send_routing_message(&self.channel_id, json);
+        service.send_routing_message(&self.channel_id, json).await;
         Ok(())
     }
 
-    /// Send a message to the other peer (async version using internal channel)
-    /// This version uses the internal device_tx channel and doesn't require a SignalingService
-    pub async fn send_message_async(&mut self, message: JsonValue) -> Result<()> {
+    /// Send a message to the other peer (async version)
+    /// This version sends directly through the WebSocket without going through SignalingService
+    pub async fn send_message_async<S: SignalingService>(&mut self, message: JsonValue, service: &S) -> Result<()> {
         if self.state == ChannelState::Closed || self.state == ChannelState::Failed {
             return Err(Error::Signaling(
                 "Cannot send message on closed or failed channel".to_string(),
@@ -319,23 +319,12 @@ impl SignalingChannel {
         let json = serde_json::to_value(&rel_msg)
             .map_err(|e| Error::Signaling(format!("Failed to serialize message: {}", e)))?;
 
-        if let Some(tx) = &self.device_tx {
-            tx.send(ChannelRequest::SendMessage {
-                channel_id: self.channel_id.clone(),
-                message: json,
-            })
-            .await
-            .map_err(|e| Error::Signaling(format!("Failed to send message request: {}", e)))?;
-            Ok(())
-        } else {
-            Err(Error::Signaling(
-                "No device sender configured for this channel".to_string(),
-            ))
-        }
+        service.send_routing_message(&self.channel_id, json).await;
+        Ok(())
     }
 
     /// Send an error to the other peer
-    pub fn send_error<S: SignalingService>(
+    pub async fn send_error<S: SignalingService>(
         &mut self,
         error_code: &str,
         error_message: Option<&str>,
@@ -350,12 +339,12 @@ impl SignalingChannel {
             message: error_message.map(|s| s.to_string()),
         };
 
-        service.send_error(&self.channel_id, error);
+        service.send_error(&self.channel_id, error).await;
         self.set_state(ChannelState::Failed);
     }
 
     /// Close the signaling channel
-    pub fn close<S: SignalingService>(&mut self, service: &mut S) {
+    pub async fn close<S: SignalingService>(&mut self, service: &mut S) {
         if self.state == ChannelState::Closed {
             return;
         }
@@ -365,7 +354,7 @@ impl SignalingChannel {
                 code: error_codes::CHANNEL_CLOSED.to_string(),
                 message: Some("The channel has been closed".to_string()),
             };
-            service.send_error(&self.channel_id, error);
+            service.send_error(&self.channel_id, error).await;
         }
 
         self.operations.clear();

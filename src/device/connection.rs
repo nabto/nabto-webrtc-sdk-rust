@@ -273,6 +273,9 @@ impl WebSocketConnection {
 
     /// Handle incoming routing message
     async fn handle_routing_message(&mut self, text: &str) -> Result<(), String> {
+        // Log the WebSocket message being received
+        eprintln!("[WebSocket] Received message: {}", text);
+
         let routing_msg: RoutingMessage = serde_json::from_str(text)
             .map_err(|e| format!("Failed to parse routing message: {}", e))?;
 
@@ -330,6 +333,9 @@ impl WebSocketConnection {
     async fn send_routing_message(&mut self, msg: &RoutingMessage) -> Result<(), String> {
         let json = serde_json::to_string(msg)
             .map_err(|e| format!("Failed to serialize message: {}", e))?;
+
+        // Log the WebSocket message being sent
+        eprintln!("[WebSocket] Sending message: {}", json);
 
         self.ws_stream
             .send(WsMessage::Text(json))

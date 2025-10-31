@@ -261,7 +261,7 @@ impl SignalingDevice {
                             eprintln!("Successfully connected to signaling service");
 
                             // Retransmit unacked messages for all existing channels after reconnection
-                            self.retransmit_unacked_messages();
+                            self.retransmit_unacked_messages().await;
                         }
                         Err(e) => {
                             eprintln!("Connection failed: {:?}", e);
@@ -290,7 +290,7 @@ impl SignalingDevice {
                                     }
                                     request = ch_rx.recv() => {
                                         if let Some(request) = request {
-                                            self.handle_channel_request(request);
+                                            self.handle_channel_request(request).await;
                                         }
                                     }
                                     command = cmd_rx.recv() => {
@@ -378,7 +378,7 @@ impl SignalingDevice {
     }
 
     /// Retransmit unacked messages for all channels after reconnection
-    fn retransmit_unacked_messages(&mut self) {
+    async fn retransmit_unacked_messages(&mut self) {
         let channel_ids: Vec<String> = self.channels.keys().cloned().collect();
 
         eprintln!(
@@ -389,7 +389,7 @@ impl SignalingDevice {
         for channel_id in channel_ids {
             eprintln!("[RETRANSMIT] Processing channel: {}", channel_id);
             if let Some(mut channel) = self.channels.remove(&channel_id) {
-                channel.handle_websocket_reconnect(self);
+                channel.handle_websocket_reconnect(self).await;
                 self.channels.insert(channel_id, channel);
             }
         }
@@ -425,7 +425,7 @@ impl SignalingDevice {
                 self.handle_channel_error(channel_id, code, message);
             }
             ConnectionEvent::PeerConnected { channel_id } => {
-                self.handle_peer_connected(channel_id);
+                self.handle_peer_connected(channel_id).await;
             }
             ConnectionEvent::PeerOffline { channel_id } => {
                 self.handle_peer_offline(channel_id);
@@ -434,16 +434,19 @@ impl SignalingDevice {
     }
 
     /// Handle a channel request (from a ChannelHandle)
-    fn handle_channel_request(&mut self, request: ChannelRequest) {
+    async fn handle_channel_request(&mut self, request: ChannelRequest) {
         match request {
             ChannelRequest::SendMessage {
                 channel_id,
                 message,
             } => {
+                eprintln!("[DEVICE] Handling SendMessage request for channel {}", channel_id);
+                eprintln!("[DEVICE] Message preview: {:?}", serde_json::to_string(&message).unwrap_or_else(|_| "failed to serialize".to_string()).chars().take(200).collect::<String>());
+
                 // Send through the channel's reliability layer
                 // We need to remove the channel temporarily to avoid borrowing issues
                 if let Some(mut channel) = self.channels.remove(&channel_id) {
-                    if let Err(e) = channel.send_message(message, self) {
+                    if let Err(e) = channel.send_message_async(message, self).await {
                         eprintln!("Failed to send message on channel {}: {:?}", channel_id, e);
                     }
                     // Put the channel back
@@ -453,7 +456,7 @@ impl SignalingDevice {
                 }
             }
             ChannelRequest::SendError { channel_id, error } => {
-                self.send_error(&channel_id, error);
+                self.send_error(&channel_id, error).await;
             }
             ChannelRequest::Close { channel_id } => {
                 self.channels.remove(&channel_id);
@@ -560,7 +563,7 @@ impl SignalingDevice {
             let mut channel = self.channels.remove(&channel_id).unwrap();
 
             // Dispatch to existing channel
-            if let Err(e) = channel.handle_routing_message(message, self) {
+            if let Err(e) = channel.handle_routing_message(message, self).await {
                 eprintln!("Error handling message on channel {}: {:?}", channel_id, e);
             }
 
@@ -581,7 +584,7 @@ impl SignalingDevice {
                     channel_with_rx.set_device_sender(self.channel_request_tx.clone());
 
                     // Handle the initial message
-                    if let Err(e) = channel_with_rx.handle_routing_message(message, self) {
+                    if let Err(e) = channel_with_rx.handle_routing_message(message, self).await {
                         eprintln!(
                             "Error handling initial message on channel {}: {:?}",
                             channel_id, e
@@ -618,7 +621,7 @@ impl SignalingDevice {
                         code: routing::error_codes::CHANNEL_NOT_FOUND.to_string(),
                         message: Some(format!("Channel {} not found", channel_id)),
                     };
-                    self.send_error(&channel_id, error);
+                    self.send_error(&channel_id, error).await;
                 }
                 Err(e) => {
                     eprintln!(
@@ -643,11 +646,11 @@ impl SignalingDevice {
     }
 
     /// Handle peer connected notification
-    fn handle_peer_connected(&mut self, channel_id: String) {
+    async fn handle_peer_connected(&mut self, channel_id: String) {
         if self.channels.contains_key(&channel_id) {
             // Remove channel temporarily to avoid borrow issues
             let mut channel = self.channels.remove(&channel_id).unwrap();
-            channel.handle_peer_connected(self);
+            channel.handle_peer_connected(self).await;
             // Put the channel back
             self.channels.insert(channel_id, channel);
         }
@@ -670,7 +673,7 @@ impl SignalingDevice {
 
 /// Implement SignalingService trait so channels can send messages through the device
 impl SignalingService for SignalingDevice {
-    fn send_routing_message(&self, channel_id: &str, message: JsonValue) {
+    async fn send_routing_message(&self, channel_id: &str, message: JsonValue) {
         if self.state != ConnectionState::Connected {
             return; // Can't send if not connected
         }
@@ -683,20 +686,16 @@ impl SignalingService for SignalingDevice {
                 authorized: None,
             };
 
-            // Serialize and send
-            if let Ok(_json) = serde_json::to_value(&routing_msg) {
-                // Send through WebSocket (fire and forget)
-                let handle_clone = handle.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = handle_clone.send_message(routing_msg).await {
-                        eprintln!("Failed to send routing message: {}", e);
-                    }
-                });
+            // Await the send to ensure messages are sent in order
+            // This prevents the race condition where tokio::spawn would allow
+            // messages to be reordered
+            if let Err(e) = handle.send_message(routing_msg).await {
+                eprintln!("Failed to send routing message: {}", e);
             }
         }
     }
 
-    fn send_error(&self, channel_id: &str, error: ErrorInfo) {
+    async fn send_error(&self, channel_id: &str, error: ErrorInfo) {
         if self.state != ConnectionState::Connected {
             return;
         }
@@ -707,12 +706,9 @@ impl SignalingService for SignalingDevice {
                 error,
             };
 
-            let handle_clone = handle.clone();
-            tokio::spawn(async move {
-                if let Err(e) = handle_clone.send_message(routing_msg).await {
-                    eprintln!("Failed to send error message: {}", e);
-                }
-            });
+            if let Err(e) = handle.send_message(routing_msg).await {
+                eprintln!("Failed to send error message: {}", e);
+            }
         }
     }
 

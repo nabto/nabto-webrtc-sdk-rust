@@ -45,11 +45,17 @@ impl Reliability {
 
     /// Send a reliable message
     pub fn send_reliable_message(&mut self, data: JsonValue) -> ReliabilityMessage {
+        let assigned_seq = self.send_seq;
+        eprintln!("[RELIABILITY] Assigning sequence number {} to message", assigned_seq);
+        eprintln!("[RELIABILITY] Message preview: {:?}", serde_json::to_string(&data).unwrap_or_else(|_| "failed to serialize".to_string()).chars().take(150).collect::<String>());
+
         let msg = ReliabilityMessage::Data {
-            seq: self.send_seq,
+            seq: assigned_seq,
             data,
         };
         self.send_seq += 1;
+        eprintln!("[RELIABILITY] Next sequence number will be {}", self.send_seq);
+
         self.unacked_messages.push(msg.clone());
         msg
     }
