@@ -5,6 +5,7 @@ use super::routing::{error_codes, ErrorInfo};
 use super::state::ChannelState;
 use crate::{Error, Result};
 use serde_json::Value as JsonValue;
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use tokio::sync::mpsc;
 
@@ -160,6 +161,13 @@ impl SignalingChannel {
         let (tx, rx) = mpsc::channel(32);
         self.message_tx = Some(tx);
         (self, rx)
+    }
+
+    // @TODO: stop-in gap as the above with_message_channel for some reason tries to take ownership
+    pub fn with_msg_channel(&mut self) -> mpsc::Receiver<JsonValue> {
+        let (tx, rx) = mpsc::channel(32);
+        self.message_tx = Some(tx);
+        rx
     }
 
     /// Get the channel ID

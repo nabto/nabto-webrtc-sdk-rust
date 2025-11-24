@@ -2,7 +2,7 @@
 /target
 Cargo.lock
 
-# IDE
+# IDE 
 .vscode/
 .idea/
 *.swp

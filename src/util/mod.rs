@@ -14,6 +14,7 @@ pub use message_encoder::{
 };
 pub use message_transport::{
     DeviceMessageTransport, DeviceMessageTransportOptions, DeviceTransportEvent,
-    IceServerProvider, MessageTransportMode, SecurityMode,
+    IceServerProvider, MessageTransportMode, SecurityMode, ClientMessageTransport,
+    ClientSecurityMode
 };
 pub use signing::{JwtMessageSigner, MessageSigner, NoneMessageSigner, SigningMessage};

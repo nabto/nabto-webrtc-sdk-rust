@@ -9,6 +9,7 @@
 
 use super::message_encoder::{IceServer, MessageEncoder, SignalingMessage, WebrtcSignalingMessage};
 use super::signing::{JwtMessageSigner, MessageSigner, NoneMessageSigner};
+use crate::client::SignalingClient;
 use crate::device::routing::ErrorInfo;
 use crate::device::ChannelHandle;
 use crate::{Error, Result};
@@ -28,6 +29,11 @@ pub enum SecurityMode {
         /// Callback to get shared secret for a given key ID
         callback: Arc<dyn Fn(Option<String>) -> Result<String> + Send + Sync>,
     },
+}
+
+pub enum ClientSecurityMode {
+    None,
+    SharedSecret { shared_secret: String, key_id: Option<String> }
 }
 
 /// Callback type for requesting ICE servers
@@ -365,20 +371,36 @@ impl Clone for DeviceMessageTransport {
 }
 
 impl ClientMessageTransport {
-    pub fn new(handle: ChannelHandle,mut message_rx: mpsc::Receiver<JsonValue>) -> Arc<Self> {
+    pub fn new(
+        client: &mut SignalingClient,
+        security_mode: ClientSecurityMode
+    ) -> Arc<Self> {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
 
         let transport = Arc::new(Self {
-            handle,
+            handle: client.channel_handle.clone(),
             encoder: MessageEncoder::new(),
-            signer: Mutex::new(None),
-            state: Mutex::new(State::WaitFirstMessage),
+            signer: match security_mode {
+                ClientSecurityMode::None => {
+                    Mutex::new(
+                        Some(Box::new(NoneMessageSigner::new()))
+                    )
+                },
+
+                ClientSecurityMode::SharedSecret { shared_secret, key_id  } => { 
+                    Mutex::new(Some(Box::new(
+                        JwtMessageSigner::new(shared_secret, key_id)
+                    )))
+                }
+            },
+            state: Mutex::new(State::Setup),
             event_tx,
             event_rx: Mutex::new(Some(event_rx))
         });
 
         
         let this = transport.clone();
+        let mut message_rx = client.channel.with_msg_channel();
         tokio::spawn(async move {
             while let Some(message) = message_rx.recv().await {
                 if let Err(e) = this.handle_channel_message_internal(message).await {
@@ -389,6 +411,10 @@ impl ClientMessageTransport {
         });
 
         transport
+    }
+
+    pub async fn start(&self) -> Result<()> {
+        self.send_signaling_message(&SignalingMessage::SetupRequest).await
     }
 
     pub fn mode(&self) -> MessageTransportMode { MessageTransportMode::Client }
@@ -408,12 +434,58 @@ impl ClientMessageTransport {
             }
         };
 
-
         self.send_signaling_message(&signaling_msg).await
     }
 
     async fn handle_channel_message_internal(&self, message: JsonValue) -> Result<()> {
-        Ok(())
+        //let state = *self.state.lock().unwrap();
+
+        let verified = {
+            let mut signer = self.signer.lock().unwrap();
+            if let Some(ref mut signer) = *signer {
+                signer.verify_message(message)?
+            } else {
+                return Self::make_err("Message signer not initialized")
+            }
+        };
+
+        let decoded = self.encoder.decode(verified)?;
+
+        self.handle_signaling_message(decoded).await
+    }
+
+    async fn handle_signaling_message(&self, msg: SignalingMessage) -> Result<()> {
+        let state = *self.state.lock().unwrap();
+
+        match state {
+            State::Setup => {
+                if msg.is_setup_response() {
+                    let ice_servers = msg.ice_servers();
+                    self.emit_setup_done(ice_servers).await;
+                    Ok(())
+                } else {
+                    Err(Error::Signaling(
+                        format!("Expected SETUP_RESPONSE but got {:?}", msg)
+                    ))
+                }
+            }
+
+            State::Signaling => {
+                if msg.is_webrtc_signaling() {
+                    if let Some(msg) = msg.as_webrtc_signaling() {
+                        self.emit_webrtc_signaling_message(msg).await;
+                    }
+                } else {
+                    // @TODO
+                }
+                Ok(())
+            }
+
+            State::WaitFirstMessage => {
+                // We should never be in this state
+                Self::make_err("ClientMessageTransport was in WaitFirstMessage state, this is a bug in the code.")
+            }
+        }
     }
 
     async fn send_signaling_message(&self, message: &SignalingMessage) -> Result<()> {
@@ -436,6 +508,14 @@ impl ClientMessageTransport {
         self.handle.send_message(signed_json).await?;
 
         Ok(())
+    }
+
+    async fn emit_webrtc_signaling_message(&self, msg: WebrtcSignalingMessage) {
+        println!("webrtc msg received");
+    }
+
+    async fn emit_setup_done(&self, ice_servers: Option<Vec<IceServer>>) {
+        println!("SETUP done: {:?}", ice_servers);
     }
 
     fn make_err(str: &str) -> Result<()> {
