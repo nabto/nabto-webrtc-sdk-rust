@@ -20,3 +20,5 @@ Thumbs.db
 *.profraw
 *.profdata
 .testdata
+
+key.pem

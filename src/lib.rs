@@ -19,7 +19,9 @@
 //! # }
 //! ```
 
+pub mod common;
 pub mod device;
+pub mod client;
 pub mod error;
 pub mod types;
 pub mod util;

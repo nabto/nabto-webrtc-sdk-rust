@@ -83,6 +83,16 @@ pub struct DeviceMessageTransport {
     event_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<DeviceTransportEvent>>>>,
 }
 
+pub struct ClientMessageTransport {
+    handle: ChannelHandle,
+    encoder: MessageEncoder,
+    signer: Mutex<Option<Box<dyn MessageSigner>>>,
+
+    event_tx: mpsc::UnboundedSender<DeviceTransportEvent>,
+    event_rx: Mutex<Option<mpsc::UnboundedReceiver<DeviceTransportEvent>>>,
+    state: Mutex<State>
+}
+
 impl DeviceMessageTransport {
     /// Create a new DeviceMessageTransport
     ///
@@ -351,6 +361,85 @@ impl DeviceMessageTransport {
 impl Clone for DeviceMessageTransport {
     fn clone(&self) -> Self {
         self.clone_for_task()
+    }
+}
+
+impl ClientMessageTransport {
+    pub fn new(handle: ChannelHandle,mut message_rx: mpsc::Receiver<JsonValue>) -> Arc<Self> {
+        let (event_tx, event_rx) = mpsc::unbounded_channel();
+
+        let transport = Arc::new(Self {
+            handle,
+            encoder: MessageEncoder::new(),
+            signer: Mutex::new(None),
+            state: Mutex::new(State::WaitFirstMessage),
+            event_tx,
+            event_rx: Mutex::new(Some(event_rx))
+        });
+
+        
+        let this = transport.clone();
+        tokio::spawn(async move {
+            while let Some(message) = message_rx.recv().await {
+                if let Err(e) = this.handle_channel_message_internal(message).await {
+                    eprintln!("Error handling channel message: {:?}", e);
+                    let _ = this.event_tx.send(DeviceTransportEvent::Error(e.to_string()));
+                }
+            }
+        });
+
+        transport
+    }
+
+    pub fn mode(&self) -> MessageTransportMode { MessageTransportMode::Client }
+
+    pub async fn send_webrtc_signaling_message(&self, msg: &WebrtcSignalingMessage) -> Result<()> {
+        let state = *self.state.lock().unwrap();
+        if state != State::Signaling {
+            return Self::make_err("Cannot send signaling message before setup is complete");
+        }
+
+        let signaling_msg = match msg {
+            WebrtcSignalingMessage::Description { description } => SignalingMessage::Description {
+                description: description.clone()
+            },
+            WebrtcSignalingMessage::Candidate { candidate } => SignalingMessage::Candidate {
+                candidate: candidate.clone()
+            }
+        };
+
+
+        self.send_signaling_message(&signaling_msg).await
+    }
+
+    async fn handle_channel_message_internal(&self, message: JsonValue) -> Result<()> {
+        Ok(())
+    }
+
+    async fn send_signaling_message(&self, message: &SignalingMessage) -> Result<()> {
+        let encoded = self.encoder.encode(message)?;
+
+        let signed = {
+            let mut signer = self.signer.lock().unwrap();
+            if let Some(ref mut signer) = *signer {
+                signer.sign_message(encoded)?
+            } else {
+                return Self::make_err("Message signer is not initialized");
+            }
+        };
+
+        let signed_json = serde_json::to_value(&signed)
+            .map_err(|e| Error::Signaling(
+                format!("Failed to serializie signed message: {}", e)
+            ))?;
+
+        self.handle.send_message(signed_json).await?;
+
+        Ok(())
+    }
+
+    fn make_err(str: &str) -> Result<()> {
+        return Err(Error::Signaling(str.to_string()));
     }
 }
 
