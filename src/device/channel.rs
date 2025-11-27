@@ -5,7 +5,6 @@ use super::routing::{error_codes, ErrorInfo};
 use super::state::ChannelState;
 use crate::{Error, Result};
 use serde_json::Value as JsonValue;
-use std::cell::RefCell;
 use std::collections::VecDeque;
 use tokio::sync::mpsc;
 
@@ -388,7 +387,7 @@ impl SignalingChannel {
                     // Initial channel setup already done
                 }
                 Operation::Message(msg) => {
-                    eprintln!("Channel {} received message: {:?}", self.channel_id, msg);
+                    //eprintln!("Channel {} received message: {:?}", self.channel_id, msg);
                     // Send message through channel if available
                     if let Some(tx) = &self.message_tx {
                         // Try to send, ignore if receiver is dropped

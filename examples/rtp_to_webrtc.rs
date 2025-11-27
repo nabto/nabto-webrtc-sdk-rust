@@ -23,7 +23,7 @@ use nabto_webrtc_sdk::device::{
     ChannelHandle, DeviceTokenGenerator, HttpApi, SignalingDevice, SignalingDeviceOptions,
 };
 use nabto_webrtc_sdk::util::{
-    DeviceMessageTransport, DeviceMessageTransportOptions, DeviceTransportEvent, SecurityMode,
+    DeviceMessageTransport, DeviceMessageTransportOptions, MessageTransportEvent, SecurityMode,
     WebrtcSignalingMessage,
 };
 use serde_json::Value as JsonValue;
@@ -37,7 +37,6 @@ use tokio::sync::{mpsc, Mutex};
 use webrtc::api::interceptor_registry::{configure_rtcp_reports, configure_twcc_receiver_only};
 use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_VP8};
 use webrtc::api::{APIBuilder, API};
-use webrtc::ice_transport::ice_credential_type::RTCIceCredentialType;
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::interceptor::registry::Registry;
 use webrtc::peer_connection::configuration::RTCConfiguration;
@@ -107,22 +106,14 @@ impl RtcConnectionHandler {
                     continue;
                 }
 
-                // Set credential type to Password for TURN servers with credentials
-                let credential_type = if is_turn {
-                    RTCIceCredentialType::Password
-                } else {
-                    RTCIceCredentialType::Unspecified
-                };
-
                 let rtc_server = RTCIceServer {
                     urls: server.urls.clone(),
                     username: server.username.clone().unwrap_or_default(),
-                    credential: server.credential.clone().unwrap_or_default(),
-                    credential_type,
+                    credential: server.credential.clone().unwrap_or_default()
                 };
 
-                println!("[{}] Adding ICE server - urls: {:?}, username: '{}', credential: '{}', type: {:?}",
-                    channel_id, rtc_server.urls, rtc_server.username, rtc_server.credential, rtc_server.credential_type);
+                println!("[{}] Adding ICE server - urls: {:?}, username: '{}', credential: '{}'",
+                    channel_id, rtc_server.urls, rtc_server.username, rtc_server.credential);
 
                 rtc_ice_servers.push(rtc_server);
             }
@@ -272,7 +263,7 @@ impl RtcConnectionHandler {
         // Handle transport events
         while let Some(event) = event_rx.recv().await {
             match event {
-                DeviceTransportEvent::SetupDone(ice_servers) => {
+                MessageTransportEvent::SetupDone(ice_servers) => {
                     println!(
                         "[{}] Setup completed, ICE servers: {:?}",
                         channel_id, ice_servers
@@ -282,11 +273,11 @@ impl RtcConnectionHandler {
                     self.create_peer_connection(ice_servers).await?;
                     println!("[{}] Peer connection ready", channel_id);
                 }
-                DeviceTransportEvent::WebrtcSignalingMessage(msg) => {
+                MessageTransportEvent::WebrtcSignalingMessage(msg) => {
                     println!("[{}] Received WebRTC signaling message", channel_id);
                     self.handle_webrtc_message(msg).await?;
                 }
-                DeviceTransportEvent::Error(err) => {
+                MessageTransportEvent::Error(err) => {
                     eprintln!("[{}] Transport error: {}", channel_id, err);
                     return Err(anyhow::anyhow!("Transport error: {}", err));
                 }

@@ -3,6 +3,8 @@ use tokio::sync::mpsc;
 use serde_json::Value as JsonValue;
 use tokio::time::Instant;
 use tokio_tungstenite::connect_async;
+use std::cell::RefCell;
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use crate::Error;
 use crate::common::http::HttpApi;
@@ -35,8 +37,13 @@ pub struct SignalingClientOptions {
     pub access_token: Option<String>    
 }
 
+pub struct SignalingClientService {
+    pub ws_handle: Option<WebSocketHandle>,
+    pub ws_event_rx: Option<mpsc::Receiver<ConnectionEvent>>,
+    pub connection_state: SignalingConnectionState
+}
+
 pub struct SignalingClient {
-    http_api: HttpApi,
     signaling_url: String,
     
     event_tx: mpsc::Sender<SignalingClientEvent>,
@@ -49,10 +56,7 @@ pub struct SignalingClient {
     channel_request_rx: mpsc::Receiver<ChannelRequest>,
 
     // Websocket
-    ws_handle: Option<WebSocketHandle>,
-    ws_event_rx: Option<mpsc::Receiver<ConnectionEvent>>,
-
-    connection_state: SignalingConnectionState
+    service: SignalingClientService
 }
 
 impl SignalingClient {
@@ -77,9 +81,10 @@ impl SignalingClient {
 
         let response = http_api.client_connect(None).await?;
         let signaling_url = response.signaling_url;
+        let device_online = response.device_online.unwrap_or(false);
 
         if let Some(cid) = response.channel_id {
-            let client = Self {
+            let mut client = Self {
                 signaling_url: signaling_url,
 
                 channel: SignalingChannel::new(cid.clone()),
@@ -88,12 +93,18 @@ impl SignalingClient {
                 channel_request_tx,
                 channel_request_rx,
 
-                http_api,
                 event_tx,
-                connection_state: SignalingConnectionState::New,
-                ws_handle: None,
-                ws_event_rx: None
+
+                service: SignalingClientService {
+                    connection_state: SignalingConnectionState::New,
+                    ws_handle: None,
+                    ws_event_rx: None
+                }
             };
+
+            if device_online {
+                client.channel.set_state(crate::device::ChannelState::Connected);
+            }
 
             Ok((client, event_rx))
         } else {
@@ -102,17 +113,16 @@ impl SignalingClient {
     }
 
     pub async fn run(&mut self) -> Result<(), crate::error::Error> {
-        if self.connection_state != SignalingConnectionState::New {
+        if self.service.connection_state != SignalingConnectionState::New {
             // @TODO: Return error
             return Ok(());
         }
 
-        println!("Looping!");
 
         loop {
-            match self.connection_state {
+            match self.service.connection_state {
                 SignalingConnectionState::New | SignalingConnectionState::WaitRetry => {
-                    if self.connection_state == SignalingConnectionState::WaitRetry {
+                    if self.service.connection_state == SignalingConnectionState::WaitRetry {
                         // @TODO: Handle WaitRetry case
                     }
 
@@ -122,7 +132,6 @@ impl SignalingClient {
                         Ok(()) => {
                             //self.connected_at = Some(Instant::now());
                             //self.reconnect_counter = 0;
-                            self.try_connect().await?;
                             self.set_connection_state(SignalingConnectionState::Connected);
                             println!("Successfully connected to signaling service");
                         }
@@ -136,7 +145,7 @@ impl SignalingClient {
                 }
 
                 SignalingConnectionState::Connected => {
-                    if let Some(ws_rx) = &mut self.ws_event_rx {
+                    if let Some(ws_rx) = &mut self.service.ws_event_rx {
                         tokio::select! {
                             event = ws_rx.recv() => {
                                 match event {
@@ -184,17 +193,13 @@ impl SignalingClient {
     async fn handle_channel_request(&mut self, request: ChannelRequest) {
         match request {
             ChannelRequest::SendMessage { channel_id, message } => {
-                println!("Client channel wants to send message: {:?}", message);
-                // @TODO: Fix the error
-                // self.channel.send_message_async(message, self);                
+                self.channel.send_message_async(message, &self.service).await;
             }
 
             ChannelRequest::SendError { channel_id, error } => {
-                eprintln!("Client channel wants to send error");
             }
 
             ChannelRequest::Close { channel_id } => {
-                println!("Client channel wants to close");
             }
         }
     }
@@ -207,8 +212,8 @@ impl SignalingClient {
         let config = WebSocketConfig::default();
         let (connection, handle, event_rx) = WebSocketConnection::new(ws_stream, config);
 
-        self.ws_handle = Some(handle);
-        self.ws_event_rx = Some(event_rx);
+        self.service.ws_handle = Some(handle);
+        self.service.ws_event_rx = Some(event_rx);
 
         tokio::spawn(async move {
             connection.run().await;
@@ -248,28 +253,30 @@ impl SignalingClient {
         }
     }
 
-    async fn handle_message(&mut self, channel_id: String, message: JsonValue, authorized: bool) {
-        println!("Websocket message: {}", message);
+    async fn handle_message(&mut self, _channel_id: String, message: JsonValue, _authorized: bool) {
+        if let Err(e) = self.channel.handle_routing_message(message, &self.service).await {
+            eprintln!("SignalingClient::handle_message error: {}", e);
+        }
     }
 
-    async fn handle_peer_connected(&mut self, channel_id: String) {
-        println!("Websocket peer connected");
+    async fn handle_peer_connected(&mut self, _channel_id: String) {
+        self.channel.handle_peer_connected(&self.service).await;
     }
 
-    async fn handle_peer_offline(&mut self, channel_id: String) {
-        println!("Websocket peer offline");
+    async fn handle_peer_offline(&mut self, _channel_id: String) {
+        self.channel.handle_peer_offline();
     }
 
     fn set_connection_state(&mut self, new_state: SignalingConnectionState) {
-        if self.connection_state != new_state {
-            self.connection_state = new_state;
-            let event = SignalingClientEvent::ConnectionStateChange(self.connection_state);
+        if self.service.connection_state != new_state {
+            self.service.connection_state = new_state;
+            let event = SignalingClientEvent::ConnectionStateChange(self.service.connection_state);
             let _ = self.event_tx.try_send(event);
         }
     }
 }
 
-impl SignalingService for SignalingClient {
+impl SignalingService for SignalingClientService {
     async fn send_routing_message(&self, channel_id: &str, message: JsonValue) {
         if self.connection_state != SignalingConnectionState::Connected {
             return;
@@ -286,6 +293,7 @@ impl SignalingService for SignalingClient {
                 eprintln!("Failed to send routing message: {}", e);
             }
         }
+
     }
 
     async fn send_error(&self, channel_id: &str, error: crate::device::ErrorInfo) {
@@ -294,5 +302,19 @@ impl SignalingService for SignalingClient {
 
     fn close_channel(&mut self, channel_id: &str) {
         todo!()
+    }
+}
+
+impl SignalingService for SignalingClient {
+    async fn send_routing_message(&self, channel_id: &str, message: JsonValue) {
+        self.service.send_routing_message(channel_id, message).await;
+    }
+
+    async fn send_error(&self, channel_id: &str, error: crate::device::ErrorInfo) {
+        self.service.send_error(channel_id, error).await;
+    }
+
+    fn close_channel(&mut self, channel_id: &str) {
+        self.service.close_channel(channel_id);
     }
 }
