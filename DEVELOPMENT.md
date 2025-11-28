@@ -143,11 +143,14 @@ Integration tests require the integration test server from the JS SDK.
 
 ### Integration Test Structure
 
-- `tests/channel_handling.rs` - Channel creation and message handling (4 tests)
-- `tests/device_client.rs` - Client connection scenarios (4 tests)
 - `tests/device_connectivity.rs` - Connection and reconnection (7 tests)
+- `tests/device_client.rs` - Client connection scenarios (4 tests)
+- `tests/channel_handling.rs` - Channel creation and message handling (4 tests)
+- `tests/device_reliability.rs` - Reliability layer and message ordering (6 tests)
 
-Total: 15 integration tests
+Total: 21 integration tests
+
+All tests use the integration test server from the JS SDK for realistic end-to-end validation.
 
 ## CI Pipeline
 
@@ -188,21 +191,55 @@ For integration test failures:
 2. Check server logs for errors
 3. Run tests with `--test-threads=1` to avoid race conditions
 
-## Module Structure
+## Workspace Structure
+
+This is a Cargo workspace with two crates:
 
 ```
-nabto_webrtc_sdk/
-├── device/          # Core device-side signaling
-│   ├── SignalingDevice
-│   ├── SignalingChannel
-│   ├── ConnectionState, ChannelState
-│   └── Internal: routing, reliability, connection, http
+nabto-webrtc-sdk-rust/
+├── nabto_webrtc/                    # Core signaling SDK
+│   ├── src/
+│   │   ├── device/                   # Device-side signaling
+│   │   │   ├── mod.rs               # SignalingDevice, SignalingDeviceOptions
+│   │   │   └── token.rs             # JWT token generation
+│   │   ├── client/                   # Client-side signaling
+│   │   │   └── mod.rs               # SignalingClient, SignalingClientOptions
+│   │   ├── common/                   # Shared implementation (internal)
+│   │   │   ├── connection.rs        # Connection state machine
+│   │   │   ├── websocket.rs         # WebSocket handling
+│   │   │   ├── http.rs              # HTTP client
+│   │   │   ├── routing.rs           # Message routing
+│   │   │   ├── reliability.rs       # ACK/sequence handling
+│   │   │   └── channel.rs           # Channel management
+│   │   ├── util/                     # High-level message transport
+│   │   │   ├── device_message_transport.rs
+│   │   │   ├── client_message_transport.rs
+│   │   │   ├── message_encoder.rs
+│   │   │   ├── signing.rs           # JWT & None security
+│   │   │   └── message_transport.rs # Shared transport types
+│   │   ├── error.rs                  # Error types
+│   │   ├── types.rs                  # Common types
+│   │   └── lib.rs                    # Public exports
+│   ├── examples/
+│   │   ├── request_ice_servers.rs
+│   │   ├── signaling_device_connect.rs
+│   │   └── rtp_to_webrtc.rs
+│   └── tests/                        # Integration tests
+│       ├── common/
+│       │   ├── test_client.rs       # Test server HTTP client
+│       │   └── test_instance.rs     # Test helper utilities
+│       ├── device_connectivity.rs   # 7 tests
+│       ├── device_client.rs         # 4 tests
+│       ├── channel_handling.rs      # 4 tests
+│       ├── device_reliability.rs    # 6 tests
+│       └── README.md
 │
-└── util/            # Message transport utilities
-    ├── DeviceMessageTransport
-    ├── MessageEncoder
-    ├── MessageSigner (JWT & None)
-    └── WebRTC message types
+└── nabto_webrtc_perfect_negotiation/ # Perfect negotiation helper
+    ├── src/
+    │   ├── perfect_negotiation.rs
+    │   └── lib.rs
+    └── examples/
+        └── client.rs
 ```
 
 ## Best Practices
@@ -212,9 +249,40 @@ nabto_webrtc_sdk/
 3. **Document public APIs** with doc comments
 4. **Keep commits atomic** and well-described
 5. **Run integration tests** when changing protocol implementation
+6. **Use workspace commands** when working across both crates:
+   ```bash
+   cargo build --workspace
+   cargo test --workspace
+   cargo clippy --workspace --all-targets --all-features
+   ```
+
+## Key Implementation Details
+
+### Device vs Client
+
+- **Device**: The service that accepts incoming WebRTC connections (e.g., an IoT device, camera, or service)
+- **Client**: The application that initiates connections to devices (e.g., web browser, mobile app)
+
+Both use the same underlying `common/` infrastructure but have different connection flows and responsibilities.
+
+### Message Transport Layers
+
+The SDK has two abstraction levels:
+
+1. **Low-level** (`device::SignalingDevice`, `client::SignalingClient`): Direct access to the signaling protocol
+2. **High-level** (`util::DeviceMessageTransport`, `util::ClientMessageTransport`): Simplified message-based API with automatic reliability
+
+Most applications should use the high-level transport APIs.
+
+### Security Modes
+
+The SDK supports two authentication modes:
+
+- **JWT**: Uses ES256 signing with a private key (production use)
+- **None**: No authentication (development/testing only)
 
 ## Getting Help
 
 - Check GitHub Issues for known problems
-- Review the protocol documentation in `~/sandbox/documentation/webrtc/protocol/`
-- Look at the JS implementation for reference: `~/sandbox/nabto-webrtc-sdk-js/`
+- Review test examples in `nabto_webrtc/tests/` for usage patterns
+- Check the integration test README at [nabto_webrtc/tests/README.md](nabto_webrtc/tests/README.md)
