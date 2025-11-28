@@ -1,10 +1,8 @@
 //! Test instance helper for integration tests
 
 use super::test_client::{DeviceTestOptions, TestClient};
-use nabto_webrtc::device::{
-    DeviceEvent, SignalingDevice, SignalingDeviceOptions
-};
 use nabto_webrtc::common::{SignalingConnectionState, WebSocketHandle};
+use nabto_webrtc::device::{DeviceEvent, SignalingDevice, SignalingDeviceOptions};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Mutex as TokioMutex};
@@ -152,9 +150,8 @@ impl DeviceTestInstance {
             tokio::spawn(async move {
                 while let Some(event) = event_rx_from_device.recv().await {
                     // Update state if it's a StateChanged event
-                    if let nabto_webrtc::device::DeviceEvent::StateChanged {
-                        new_state, ..
-                    } = &event
+                    if let nabto_webrtc::device::DeviceEvent::StateChanged { new_state, .. } =
+                        &event
                     {
                         let _ = state_tx_clone.send(*new_state);
                     }

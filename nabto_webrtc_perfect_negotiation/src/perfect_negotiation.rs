@@ -1,14 +1,14 @@
 use nabto_webrtc::util::ClientMessageTransport;
+use nabto_webrtc::util::MessageTransportMode;
 use nabto_webrtc::util::{IceCandidate, SessionDescription, WebrtcSignalingMessage};
-use nabto_webrtc::util::{MessageTransportMode};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use webrtc::ice_transport::ice_candidate::{RTCIceCandidate, RTCIceCandidateInit};
 use webrtc::ice_transport::ice_connection_state::RTCIceConnectionState;
+use webrtc::peer_connection::RTCPeerConnection;
 use webrtc::peer_connection::sdp::sdp_type::RTCSdpType;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::peer_connection::signaling_state::RTCSignalingState;
-use webrtc::peer_connection::RTCPeerConnection;
 
 pub struct PerfectNegotiation {
     making_offer: Arc<Mutex<bool>>,
@@ -130,7 +130,9 @@ impl PerfectNegotiation {
             description: session_desc,
         };
 
-        self.message_transport.send_webrtc_signaling_message(&message).await?;
+        self.message_transport
+            .send_webrtc_signaling_message(&message)
+            .await?;
 
         Ok(())
     }
@@ -160,7 +162,8 @@ impl PerfectNegotiation {
     async fn handle_description(&self, description: SessionDescription) {
         let result = async {
             let making_offer = *self.making_offer.lock().await;
-            let is_setting_remote_answer_pending = *self.is_setting_remote_answer_pending.lock().await;
+            let is_setting_remote_answer_pending =
+                *self.is_setting_remote_answer_pending.lock().await;
             let signaling_state = self.pc.signaling_state();
 
             let sdp_type = match description.desc_type.as_str() {
@@ -173,15 +176,13 @@ impl PerfectNegotiation {
                 }
             };
 
-            let ready_for_offer = 
-                !making_offer &&
-                (signaling_state == RTCSignalingState::Stable || is_setting_remote_answer_pending);
-            let offer_collision =
-                sdp_type == RTCSdpType::Offer && !ready_for_offer;
+            let ready_for_offer = !making_offer
+                && (signaling_state == RTCSignalingState::Stable
+                    || is_setting_remote_answer_pending);
+            let offer_collision = sdp_type == RTCSdpType::Offer && !ready_for_offer;
 
             let ignore_offer = !self.polite && offer_collision;
             *self.ignore_offer.lock().await = ignore_offer;
-
 
             if ignore_offer {
                 return Ok(());
@@ -242,4 +243,3 @@ impl PerfectNegotiation {
         }
     }
 }
-

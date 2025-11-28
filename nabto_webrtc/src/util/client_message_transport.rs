@@ -1,5 +1,5 @@
-use super::message_transport::{MessageTransportEvent, State, MessageTransportMode};
 use super::message_encoder::{IceServer, MessageEncoder, SignalingMessage, WebrtcSignalingMessage};
+use super::message_transport::{MessageTransportEvent, MessageTransportMode, State};
 use super::signing::{JwtMessageSigner, MessageSigner, NoneMessageSigner};
 use crate::client::SignalingClient;
 use crate::common::channel::ChannelHandle;
@@ -10,7 +10,10 @@ use tokio::sync::mpsc;
 
 pub enum ClientSecurityMode {
     None,
-    SharedSecret { shared_secret: String, key_id: Option<String> }
+    SharedSecret {
+        shared_secret: String,
+        key_id: Option<String>,
+    },
 }
 
 pub struct ClientMessageTransport {
@@ -19,47 +22,40 @@ pub struct ClientMessageTransport {
     signer: Mutex<Option<Box<dyn MessageSigner>>>,
 
     event_tx: mpsc::UnboundedSender<MessageTransportEvent>,
-    state: Mutex<State>
+    state: Mutex<State>,
 }
 
 impl ClientMessageTransport {
     pub fn new(
         client: &mut SignalingClient,
-        security_mode: ClientSecurityMode
-    ) -> (
-        Arc<Self>,
-        mpsc::UnboundedReceiver<MessageTransportEvent>
-    ) {
+        security_mode: ClientSecurityMode,
+    ) -> (Arc<Self>, mpsc::UnboundedReceiver<MessageTransportEvent>) {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
 
         let transport = Arc::new(Self {
             handle: client.channel_handle.clone(),
             encoder: MessageEncoder::new(),
             signer: match security_mode {
-                ClientSecurityMode::None => {
-                    Mutex::new(
-                        Some(Box::new(NoneMessageSigner::new()))
-                    )
-                },
+                ClientSecurityMode::None => Mutex::new(Some(Box::new(NoneMessageSigner::new()))),
 
-                ClientSecurityMode::SharedSecret { shared_secret, key_id  } => { 
-                    Mutex::new(Some(Box::new(
-                        JwtMessageSigner::new(shared_secret, key_id)
-                    )))
-                }
+                ClientSecurityMode::SharedSecret {
+                    shared_secret,
+                    key_id,
+                } => Mutex::new(Some(Box::new(JwtMessageSigner::new(shared_secret, key_id)))),
             },
             state: Mutex::new(State::Setup),
-            event_tx
+            event_tx,
         });
 
-        
         let this = transport.clone();
         let mut message_rx = client.channel.with_msg_channel();
         tokio::spawn(async move {
             while let Some(message) = message_rx.recv().await {
                 if let Err(e) = this.handle_channel_message_internal(message).await {
                     eprintln!("Error handling channel message: {:?}", e);
-                    let _ = this.event_tx.send(MessageTransportEvent::Error(e.to_string()));
+                    let _ = this
+                        .event_tx
+                        .send(MessageTransportEvent::Error(e.to_string()));
                 }
             }
         });
@@ -68,10 +64,13 @@ impl ClientMessageTransport {
     }
 
     pub async fn start(&self) -> Result<()> {
-        self.send_signaling_message(&SignalingMessage::SetupRequest).await
+        self.send_signaling_message(&SignalingMessage::SetupRequest)
+            .await
     }
 
-    pub fn mode(&self) -> MessageTransportMode { MessageTransportMode::Client }
+    pub fn mode(&self) -> MessageTransportMode {
+        MessageTransportMode::Client
+    }
 
     pub async fn send_webrtc_signaling_message(&self, msg: &WebrtcSignalingMessage) -> Result<()> {
         let state = *self.state.lock().unwrap();
@@ -81,11 +80,11 @@ impl ClientMessageTransport {
 
         let signaling_msg = match msg {
             WebrtcSignalingMessage::Description { description } => SignalingMessage::Description {
-                description: description.clone()
+                description: description.clone(),
             },
             WebrtcSignalingMessage::Candidate { candidate } => SignalingMessage::Candidate {
-                candidate: candidate.clone()
-            }
+                candidate: candidate.clone(),
+            },
         };
 
         self.send_signaling_message(&signaling_msg).await
@@ -99,7 +98,7 @@ impl ClientMessageTransport {
             if let Some(ref mut signer) = *signer {
                 signer.verify_message(message)?
             } else {
-                return Self::make_err("Message signer not initialized")
+                return Self::make_err("Message signer not initialized");
             }
         };
 
@@ -118,9 +117,10 @@ impl ClientMessageTransport {
                     self.emit_setup_done(ice_servers).await;
                     Ok(())
                 } else {
-                    Err(Error::Signaling(
-                        format!("Expected SETUP_RESPONSE but got {:?}", msg)
-                    ))
+                    Err(Error::Signaling(format!(
+                        "Expected SETUP_RESPONSE but got {:?}",
+                        msg
+                    )))
                 }
             }
 
@@ -155,9 +155,7 @@ impl ClientMessageTransport {
         };
 
         let signed_json = serde_json::to_value(&signed)
-            .map_err(|e| Error::Signaling(
-                format!("Failed to serializie signed message: {}", e)
-            ))?;
+            .map_err(|e| Error::Signaling(format!("Failed to serializie signed message: {}", e)))?;
 
         self.handle.send_message(signed_json).await?;
 
@@ -178,6 +176,6 @@ impl ClientMessageTransport {
     }
 
     fn make_err(str: &str) -> Result<()> {
-        return Err(Error::Signaling(str.to_string()));
+        Err(Error::Signaling(str.to_string()))
     }
 }

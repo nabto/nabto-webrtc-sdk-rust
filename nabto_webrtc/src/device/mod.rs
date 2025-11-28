@@ -7,13 +7,13 @@ mod token;
 
 pub use token::DeviceTokenGenerator;
 
-use crate::common::{SignalingChannelState, SignalingConnectionState};
-use crate::common::{ConnectionEvent, WebSocketConfig, WebSocketConnection, WebSocketHandle};
-use crate::common::routing::RoutingMessage;
+use crate::common::channel::{ChannelHandle, ChannelRequest, SignalingChannel, SignalingService};
 use crate::common::routing::error_codes;
 use crate::common::routing::ErrorInfo;
-use crate::common::channel::{ChannelHandle, ChannelRequest, SignalingChannel, SignalingService};
+use crate::common::routing::RoutingMessage;
+use crate::common::{ConnectionEvent, WebSocketConfig, WebSocketConnection, WebSocketHandle};
 use crate::common::{HttpApi, IceServer};
+use crate::common::{SignalingChannelState, SignalingConnectionState};
 use crate::{Error, Result};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -431,8 +431,18 @@ impl SignalingDevice {
                 channel_id,
                 message,
             } => {
-                eprintln!("[DEVICE] Handling SendMessage request for channel {}", channel_id);
-                eprintln!("[DEVICE] Message preview: {:?}", serde_json::to_string(&message).unwrap_or_else(|_| "failed to serialize".to_string()).chars().take(200).collect::<String>());
+                eprintln!(
+                    "[DEVICE] Handling SendMessage request for channel {}",
+                    channel_id
+                );
+                eprintln!(
+                    "[DEVICE] Message preview: {:?}",
+                    serde_json::to_string(&message)
+                        .unwrap_or_else(|_| "failed to serialize".to_string())
+                        .chars()
+                        .take(200)
+                        .collect::<String>()
+                );
 
                 // Send through the channel's reliability layer
                 // We need to remove the channel temporarily to avoid borrowing issues

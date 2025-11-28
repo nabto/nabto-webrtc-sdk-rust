@@ -1,5 +1,6 @@
 [workspace]
 members = ["nabto_webrtc", "nabto_webrtc_perfect_negotiation"]
+default-members = ["nabto_webrtc"]
 resolver = "2"
 
 [profile.release-size]

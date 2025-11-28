@@ -7,17 +7,17 @@
 //! - Channel setup (SETUP_REQUEST/RESPONSE exchange)
 //! - Event emission for WebRTC messages, errors, and setup completion
 
-use super::message_transport::{MessageTransportEvent, State, MessageTransportMode};
 use super::message_encoder::{IceServer, MessageEncoder, SignalingMessage, WebrtcSignalingMessage};
+use super::message_transport::{MessageTransportEvent, MessageTransportMode, State};
 use super::signing::{JwtMessageSigner, MessageSigner, NoneMessageSigner};
 use crate::common::channel::ChannelHandle;
 use crate::common::routing::ErrorInfo;
 use crate::{Error, Result};
 use serde_json::Value as JsonValue;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
-use std::pin::Pin;
-use std::future::Future;
 
 /// Security mode for the device transport
 #[derive(Clone)]
@@ -32,8 +32,8 @@ pub enum SecurityMode {
 }
 
 /// Callback type for requesting ICE servers
-pub type IceServerProvider = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<Vec<IceServer>>> + Send>> + Send + Sync>;
-
+pub type IceServerProvider =
+    Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<Vec<IceServer>>> + Send>> + Send + Sync>;
 
 /// Device message transport options
 #[derive(Clone)]
@@ -345,4 +345,3 @@ mod tests {
         assert_eq!(transport.mode(), MessageTransportMode::Device);
     }
 }
-

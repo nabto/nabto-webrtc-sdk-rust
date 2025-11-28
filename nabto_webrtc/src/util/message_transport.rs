@@ -15,7 +15,7 @@ pub enum MessageTransportEvent {
 
 /// State of the DeviceMessageTransport
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
- pub(super) enum State {
+pub(super) enum State {
     /// Waiting for the first message from the client
     WaitFirstMessage,
 

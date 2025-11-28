@@ -20,7 +20,7 @@ struct ClientConnectRequest {
     #[serde(rename = "deviceId")]
     device_id: String,
     #[serde(rename = "productId")]
-    product_id: String
+    product_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -32,7 +32,7 @@ pub struct ClientConnectResponse {
     #[serde(rename = "channelId")]
     pub channel_id: Option<String>,
     #[serde(rename = "reconnectToken")]
-    pub reconnect_token: Option<String>
+    pub reconnect_token: Option<String>,
 }
 
 /// Request body for device connect
@@ -101,7 +101,7 @@ impl HttpApi {
 
         let request_body = ClientConnectRequest {
             product_id: self.product_id.clone(),
-            device_id: self.device_id.clone()
+            device_id: self.device_id.clone(),
         };
 
         let mut request = self
@@ -114,12 +114,9 @@ impl HttpApi {
             request = request.header("Authorization", format!("Bearer {}", token));
         }
 
-        let response = request
-            .send()
-            .await
-            .map_err(|e| {
-                Error::Connection(format!("Failed to send client connect request: {}", e))
-            })?;
+        let response = request.send().await.map_err(|e| {
+            Error::Connection(format!("Failed to send client connect request: {}", e))
+        })?;
 
         self.handle_response(response).await
     }

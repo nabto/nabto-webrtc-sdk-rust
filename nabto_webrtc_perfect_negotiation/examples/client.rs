@@ -1,20 +1,19 @@
-use nabto_webrtc_perfect_negotiation::PerfectNegotiation;
-use nabto_webrtc::client::{SignalingClient, SignalingClientOptions, SignalingClientEvent};
+use anyhow::Result;
+use nabto_webrtc::client::{SignalingClient, SignalingClientEvent, SignalingClientOptions};
 use nabto_webrtc::common::SignalingConnectionState;
 use nabto_webrtc::util::{ClientMessageTransport, ClientSecurityMode, MessageTransportEvent};
+use nabto_webrtc_perfect_negotiation::PerfectNegotiation;
+use std::sync::Arc;
 use webrtc::api::APIBuilder;
 use webrtc::api::interceptor_registry::{configure_rtcp_reports, configure_twcc_receiver_only};
 use webrtc::api::media_engine::MediaEngine;
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::interceptor::registry::Registry;
-use webrtc::peer_connection::configuration::RTCConfiguration;
-use std::sync::Arc;
 use webrtc::peer_connection::RTCPeerConnection;
-use anyhow::Result;
+use webrtc::peer_connection::configuration::RTCConfiguration;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-
     // WebRTC setup
     let mut pc: Option<Arc<RTCPeerConnection>> = None;
     let mut perfect_negotiation: Option<Arc<PerfectNegotiation>> = None;
@@ -40,14 +39,14 @@ async fn main() -> Result<()> {
         device_id: "wd-qpjx37pf9utuzwbq".to_string(),
         access_token: None,
         endpoint_url: None,
-        require_online: None
+        require_online: None,
     };
 
     let (mut client, mut event_rx) = SignalingClient::new(options).await.unwrap();
 
     let security_mode = ClientSecurityMode::SharedSecret {
         shared_secret: "bar".to_string(),
-        key_id: None
+        key_id: None,
     };
 
     let (transport, mut transport_rx) = ClientMessageTransport::new(&mut client, security_mode);
@@ -73,12 +72,12 @@ async fn main() -> Result<()> {
                             let rtc_server = RTCIceServer {
                                 urls: server.urls.to_owned(),
                                 username: server.username.clone().unwrap_or("".to_owned()),
-                                credential: server.credential.clone().unwrap_or("".to_owned())
+                                credential: server.credential.clone().unwrap_or("".to_owned()),
                             };
                             rtc_ice_servers.push(rtc_server);
                         }
                     }
-                    
+
                     let config = RTCConfiguration {
                         ice_servers: rtc_ice_servers.to_owned(),
                         ..Default::default()
@@ -89,21 +88,25 @@ async fn main() -> Result<()> {
                             let arc_pc = Arc::new(peer_connection);
                             *perfect_negotiation = Some(PerfectNegotiation::new(
                                 Arc::clone(&arc_pc),
-                                Arc::clone(&transport_clone)
+                                Arc::clone(&transport_clone),
                             ));
 
-                            arc_pc.on_track(Box::new(move |track, rtp_receiver, rtp_transceiver| {
-                                Box::pin(async move {
-                                    println!("*** RECEIVED NEW TRACK: {} {}", track.kind(), track.id())
-                                })
-                            }));
+                            arc_pc.on_track(Box::new(
+                                move |track, rtp_receiver, rtp_transceiver| {
+                                    Box::pin(async move {
+                                        println!(
+                                            "*** RECEIVED NEW TRACK: {} {}",
+                                            track.kind(),
+                                            track.id()
+                                        )
+                                    })
+                                },
+                            ));
 
                             Some(arc_pc)
                         }
 
-                        Err(e) => {
-                            None
-                        }
+                        Err(e) => None,
                     }
                 }
 
@@ -113,9 +116,7 @@ async fn main() -> Result<()> {
                     }
                 }
 
-                MessageTransportEvent::Error(err) => {
-
-                }
+                MessageTransportEvent::Error(err) => {}
             }
         }
     });
@@ -126,28 +127,34 @@ async fn main() -> Result<()> {
             match event {
                 SignalingClientEvent::Message(value) => {
                     println!("SignalingClientEvent::Message");
-                },
+                }
 
                 SignalingClientEvent::ConnectionReconnect => {
                     println!("SignalingClientEvent::ConnectionReconnect");
-                },
+                }
 
                 SignalingClientEvent::ConnectionStateChange(signaling_connection_state) => {
-                    println!("SignalingClientEvent::ConnectionStateChange: {:?}", signaling_connection_state);
+                    println!(
+                        "SignalingClientEvent::ConnectionStateChange: {:?}",
+                        signaling_connection_state
+                    );
                     if signaling_connection_state == SignalingConnectionState::Connected {
                         // @TODO: should transport.start() be in here or should we try a different pattern?
                         // @TODO: Check this error
                         let err = transport.start().await;
                     }
-                },
+                }
 
                 SignalingClientEvent::ChannelStateChange(signaling_channel_state) => {
-                    println!("SignalingClientEvent::ChannelStateChange {:?}", signaling_channel_state);
-                },
+                    println!(
+                        "SignalingClientEvent::ChannelStateChange {:?}",
+                        signaling_channel_state
+                    );
+                }
 
                 SignalingClientEvent::Error => {
                     println!("SignalingClientEvent::Error");
-                },
+                }
             }
         }
     });

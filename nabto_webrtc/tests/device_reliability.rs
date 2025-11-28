@@ -12,9 +12,9 @@
 mod common;
 
 use common::{DeviceTestInstance, DeviceTestOptions};
-use nabto_webrtc::device::DeviceEvent;
 use nabto_webrtc::common::channel::ChannelHandle;
 use nabto_webrtc::common::SignalingConnectionState;
+use nabto_webrtc::device::DeviceEvent;
 use serde_json::Value as JsonValue;
 use std::time::Duration;
 use tokio::sync::mpsc;

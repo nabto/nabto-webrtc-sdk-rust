@@ -19,15 +19,15 @@
 //! # }
 //! ```
 
+pub mod client;
 pub mod common;
 pub mod device;
-pub mod client;
 pub mod error;
 pub mod types;
 pub mod util;
 
-pub use error::{Error, Result};
 pub use common::{SignalingChannelState, SignalingConnectionState};
+pub use error::{Error, Result};
 
 #[cfg(test)]
 mod tests {
