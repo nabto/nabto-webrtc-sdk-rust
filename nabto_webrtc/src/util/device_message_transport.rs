@@ -10,8 +10,8 @@
 use super::message_transport::{MessageTransportEvent, State, MessageTransportMode};
 use super::message_encoder::{IceServer, MessageEncoder, SignalingMessage, WebrtcSignalingMessage};
 use super::signing::{JwtMessageSigner, MessageSigner, NoneMessageSigner};
-use crate::device::ChannelHandle;
-use crate::device::routing::ErrorInfo;
+use crate::common::channel::ChannelHandle;
+use crate::common::routing::ErrorInfo;
 use crate::{Error, Result};
 use serde_json::Value as JsonValue;
 use std::sync::{Arc, Mutex};
@@ -328,7 +328,7 @@ impl Clone for DeviceMessageTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::device::ChannelRequest;
+    use crate::common::channel::ChannelRequest;
 
     #[tokio::test]
     async fn test_transport_mode() {

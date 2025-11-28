@@ -12,7 +12,9 @@
 mod common;
 
 use common::{DeviceTestInstance, DeviceTestOptions};
-use nabto_webrtc::device::{ChannelHandle, ConnectionState, DeviceEvent};
+use nabto_webrtc::device::DeviceEvent;
+use nabto_webrtc::common::channel::ChannelHandle;
+use nabto_webrtc::common::SignalingConnectionState;
 use serde_json::Value as JsonValue;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -98,7 +100,7 @@ async fn test_reliability_1_successfully_sending_messages() {
 
     // Wait for device to connect
     device_handle
-        .wait_for_state(ConnectionState::Connected, Duration::from_secs(5))
+        .wait_for_state(SignalingConnectionState::Connected, Duration::from_secs(5))
         .await
         .expect("Device did not reach Connected state");
 
@@ -157,7 +159,7 @@ async fn test_reliability_2_successfully_receiving_messages() {
 
     // Wait for device to connect
     device_handle
-        .wait_for_state(ConnectionState::Connected, Duration::from_secs(5))
+        .wait_for_state(SignalingConnectionState::Connected, Duration::from_secs(5))
         .await
         .expect("Device did not reach Connected state");
 
@@ -212,7 +214,7 @@ async fn test_reliability_3_resend_messages_when_peer_becomes_online() {
 
     // Wait for device to connect
     device_handle
-        .wait_for_state(ConnectionState::Connected, Duration::from_secs(5))
+        .wait_for_state(SignalingConnectionState::Connected, Duration::from_secs(5))
         .await
         .expect("Device did not reach Connected state");
 
@@ -293,7 +295,7 @@ async fn test_reliability_4_resend_messages_lost_on_stale_websocket() {
 
     // Wait for device to connect
     device_handle
-        .wait_for_state(ConnectionState::Connected, Duration::from_secs(5))
+        .wait_for_state(SignalingConnectionState::Connected, Duration::from_secs(5))
         .await
         .expect("Device did not reach Connected state");
     println!("[TEST4] Device connected");
@@ -406,7 +408,7 @@ async fn test_reliability_5_discard_duplicate_messages() {
 
     // Wait for device to connect
     device_handle
-        .wait_for_state(ConnectionState::Connected, Duration::from_secs(5))
+        .wait_for_state(SignalingConnectionState::Connected, Duration::from_secs(5))
         .await
         .expect("Device did not reach Connected state");
 
@@ -485,7 +487,7 @@ async fn test_reliability_6_resend_unacked_messages_on_peer_online() {
 
     // Wait for device to connect
     device_handle
-        .wait_for_state(ConnectionState::Connected, Duration::from_secs(5))
+        .wait_for_state(SignalingConnectionState::Connected, Duration::from_secs(5))
         .await
         .expect("Device did not reach Connected state");
 

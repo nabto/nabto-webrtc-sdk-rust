@@ -7,7 +7,7 @@
 //! - PING/PONG keepalive handling
 //! - Event emission for connection lifecycle
 
-use super::routing::RoutingMessage;
+use crate::common::routing::RoutingMessage;
 use futures::{SinkExt, StreamExt};
 use serde_json::Value as JsonValue;
 use std::time::Duration;

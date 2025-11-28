@@ -2,8 +2,9 @@
 
 use super::test_client::{DeviceTestOptions, TestClient};
 use nabto_webrtc::device::{
-    ConnectionState, DeviceEvent, SignalingDevice, SignalingDeviceOptions, WebSocketHandle,
+    DeviceEvent, SignalingDevice, SignalingDeviceOptions
 };
+use nabto_webrtc::common::{SignalingConnectionState, WebSocketHandle};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Mutex as TokioMutex};
@@ -15,13 +16,13 @@ pub struct DeviceTestInstance {
     pub endpoint_url: String,
     pub test_id: String,
     pub access_token: String,
-    pub observed_states: Arc<std::sync::Mutex<Vec<ConnectionState>>>,
+    pub observed_states: Arc<std::sync::Mutex<Vec<SignalingConnectionState>>>,
     test_client: TestClient,
 }
 
 /// Handle to a running SignalingDevice
 pub struct DeviceHandle {
-    state_rx: Arc<TokioMutex<tokio::sync::watch::Receiver<ConnectionState>>>,
+    state_rx: Arc<TokioMutex<tokio::sync::watch::Receiver<SignalingConnectionState>>>,
     stop_tx: Arc<TokioMutex<Option<tokio::sync::oneshot::Sender<()>>>>,
     command_tx: mpsc::Sender<nabto_webrtc::device::DeviceCommand>,
     _task: tokio::task::JoinHandle<()>,
@@ -29,7 +30,7 @@ pub struct DeviceHandle {
 
 impl DeviceHandle {
     /// Get the current connection state
-    pub async fn connection_state(&self) -> ConnectionState {
+    pub async fn connection_state(&self) -> SignalingConnectionState {
         *self.state_rx.lock().await.borrow()
     }
 
@@ -51,7 +52,7 @@ impl DeviceHandle {
     /// Wait for the device to reach a specific state
     pub async fn wait_for_state(
         &self,
-        expected_state: ConnectionState,
+        expected_state: SignalingConnectionState,
         timeout: Duration,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let start = Instant::now();
@@ -137,7 +138,7 @@ impl DeviceTestInstance {
         let (mut device, mut event_rx_from_device, command_tx) = self.create_signaling_device();
 
         // Create channels for state tracking and stop signal
-        let (state_tx, state_rx) = tokio::sync::watch::channel(ConnectionState::New);
+        let (state_tx, state_rx) = tokio::sync::watch::channel(SignalingConnectionState::New);
         let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel();
 
         // Create a new event channel that we'll forward events to
@@ -186,13 +187,13 @@ impl DeviceTestInstance {
     }
 
     /// Record a connection state change (to be called manually from tests for now)
-    pub fn record_state(&self, state: ConnectionState) {
+    pub fn record_state(&self, state: SignalingConnectionState) {
         let mut states = self.observed_states.lock().unwrap();
         states.push(state);
     }
 
     /// Get the currently observed states
-    pub fn get_observed_states(&self) -> Vec<ConnectionState> {
+    pub fn get_observed_states(&self) -> Vec<SignalingConnectionState> {
         self.observed_states.lock().unwrap().clone()
     }
 
@@ -200,7 +201,7 @@ impl DeviceTestInstance {
     /// This is a polling-based implementation until we add proper event listeners
     pub async fn wait_for_observed_states(
         &self,
-        expected: Vec<ConnectionState>,
+        expected: Vec<SignalingConnectionState>,
         timeout: Duration,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let start = Instant::now();
@@ -229,7 +230,7 @@ impl DeviceTestInstance {
     pub async fn wait_for_state(
         &self,
         device: &SignalingDevice,
-        expected_state: ConnectionState,
+        expected_state: SignalingConnectionState,
         timeout: Duration,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let start = Instant::now();

@@ -20,8 +20,10 @@
 use anyhow::Result;
 use clap::Parser;
 use nabto_webrtc::device::{
-    ChannelHandle, DeviceTokenGenerator, HttpApi, SignalingDevice, SignalingDeviceOptions,
+    DeviceTokenGenerator, SignalingDevice, SignalingDeviceOptions,
 };
+use nabto_webrtc::common::HttpApi;
+use nabto_webrtc::common::channel::ChannelHandle;
 use nabto_webrtc::util::{
     DeviceMessageTransport, DeviceMessageTransportOptions, MessageTransportEvent, SecurityMode,
     WebrtcSignalingMessage,

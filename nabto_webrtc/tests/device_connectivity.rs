@@ -12,7 +12,7 @@
 mod common;
 
 use common::{DeviceTestInstance, DeviceTestOptions};
-use nabto_webrtc::device::ConnectionState;
+use nabto_webrtc::common::SignalingConnectionState;
 use std::time::Duration;
 
 /// Device Connectivity Test 1:
@@ -27,17 +27,17 @@ async fn test_device_connect_ok() {
     let (device, _event_rx) = test.start_signaling_device();
 
     // Device should start in New state
-    assert_eq!(device.connection_state().await, ConnectionState::New);
+    assert_eq!(device.connection_state().await, SignalingConnectionState::New);
 
     // Start the device
 
     // Wait for device to reach Connected state
     device
-        .wait_for_state(ConnectionState::Connected, Duration::from_secs(5))
+        .wait_for_state(SignalingConnectionState::Connected, Duration::from_secs(5))
         .await
         .expect("Device did not reach Connected state");
 
-    assert_eq!(device.connection_state().await, ConnectionState::Connected);
+    assert_eq!(device.connection_state().await, SignalingConnectionState::Connected);
 
     // Cleanup
     device.stop().await; // Stop device("Failed to close device");
@@ -58,7 +58,7 @@ async fn test_device_close() {
 
     // Start and wait for connection
     device
-        .wait_for_state(ConnectionState::Connected, Duration::from_secs(5))
+        .wait_for_state(SignalingConnectionState::Connected, Duration::from_secs(5))
         .await
         .expect("Device did not reach Connected state");
 
@@ -67,12 +67,12 @@ async fn test_device_close() {
 
     // Wait for the device to reach Closed state
     device
-        .wait_for_state(ConnectionState::Closed, Duration::from_secs(5))
+        .wait_for_state(SignalingConnectionState::Closed, Duration::from_secs(5))
         .await
         .expect("Device did not reach Closed state");
 
     // Verify state is Closed
-    assert_eq!(device.connection_state().await, ConnectionState::Closed);
+    assert_eq!(device.connection_state().await, SignalingConnectionState::Closed);
 
     // Cleanup
     test.destroy().await.expect("Failed to destroy test");
@@ -97,11 +97,11 @@ async fn test_device_http_error_retry() {
 
     // The device should go to WaitRetry state due to HTTP failure
     device
-        .wait_for_state(ConnectionState::WaitRetry, Duration::from_secs(5))
+        .wait_for_state(SignalingConnectionState::WaitRetry, Duration::from_secs(5))
         .await
         .expect("Device did not reach WaitRetry state");
 
-    assert_eq!(device.connection_state().await, ConnectionState::WaitRetry);
+    assert_eq!(device.connection_state().await, SignalingConnectionState::WaitRetry);
 
     // Cleanup
     device.stop().await;
@@ -127,11 +127,11 @@ async fn test_device_websocket_error_retry() {
 
     // The device should go to WaitRetry state due to WebSocket failure
     device
-        .wait_for_state(ConnectionState::WaitRetry, Duration::from_secs(5))
+        .wait_for_state(SignalingConnectionState::WaitRetry, Duration::from_secs(5))
         .await
         .expect("Device did not reach WaitRetry state");
 
-    assert_eq!(device.connection_state().await, ConnectionState::WaitRetry);
+    assert_eq!(device.connection_state().await, SignalingConnectionState::WaitRetry);
 
     // Cleanup
     device.stop().await;
@@ -152,7 +152,7 @@ async fn test_device_reconnects_after_disconnect() {
 
     // Start and wait for initial connection
     device
-        .wait_for_state(ConnectionState::Connected, Duration::from_secs(5))
+        .wait_for_state(SignalingConnectionState::Connected, Duration::from_secs(5))
         .await
         .expect("Device did not reach Connected state initially");
 
@@ -167,12 +167,12 @@ async fn test_device_reconnects_after_disconnect() {
 
     // Wait for device to detect disconnection and go to WaitRetry state
     device
-        .wait_for_state(ConnectionState::WaitRetry, Duration::from_secs(5))
+        .wait_for_state(SignalingConnectionState::WaitRetry, Duration::from_secs(5))
         .await
         .expect("Device did not reach WaitRetry state after disconnect");
 
     // Device should now be in WaitRetry state
-    assert_eq!(device.connection_state().await, ConnectionState::WaitRetry);
+    assert_eq!(device.connection_state().await, SignalingConnectionState::WaitRetry);
     println!("Device is in WaitRetry state");
 
     // TODO: Automatic reconnection is not yet implemented
@@ -200,11 +200,11 @@ async fn test_device_http_extensibility() {
 
     // Device should still connect successfully even with extra fields
     device
-        .wait_for_state(ConnectionState::Connected, Duration::from_secs(5))
+        .wait_for_state(SignalingConnectionState::Connected, Duration::from_secs(5))
         .await
         .expect("Device did not reach Connected state");
 
-    assert_eq!(device.connection_state().await, ConnectionState::Connected);
+    assert_eq!(device.connection_state().await, SignalingConnectionState::Connected);
 
     // Cleanup
     device.stop().await; // Stop device("Failed to close device");
@@ -225,7 +225,7 @@ async fn test_device_ws_unknown_message_type() {
 
     // Start and connect
     device
-        .wait_for_state(ConnectionState::Connected, Duration::from_secs(5))
+        .wait_for_state(SignalingConnectionState::Connected, Duration::from_secs(5))
         .await
         .expect("Device did not reach Connected state");
 
@@ -237,11 +237,11 @@ async fn test_device_ws_unknown_message_type() {
     // Device should still be connected (ignored the unknown message)
     // Wait a bit to ensure it remains in Connected state
     device
-        .wait_for_state(ConnectionState::Connected, Duration::from_millis(500))
+        .wait_for_state(SignalingConnectionState::Connected, Duration::from_millis(500))
         .await
         .expect("Device should remain in Connected state");
 
-    assert_eq!(device.connection_state().await, ConnectionState::Connected);
+    assert_eq!(device.connection_state().await, SignalingConnectionState::Connected);
 
     // Cleanup
     device.stop().await; // Stop device("Failed to close device");

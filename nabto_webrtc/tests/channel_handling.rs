@@ -12,7 +12,8 @@
 mod common;
 
 use common::{DeviceTestInstance, DeviceTestOptions};
-use nabto_webrtc::device::{ConnectionState, DeviceEvent};
+use nabto_webrtc::device::DeviceEvent;
+use nabto_webrtc::common::SignalingConnectionState;
 use std::time::Duration;
 
 /// Channel Test 1:
@@ -29,7 +30,7 @@ async fn test_channel_creation_on_client_connect() {
 
     // Start and connect the device
     device
-        .wait_for_state(ConnectionState::Connected, Duration::from_secs(5))
+        .wait_for_state(SignalingConnectionState::Connected, Duration::from_secs(5))
         .await
         .expect("Device did not reach Connected state");
 
@@ -110,7 +111,7 @@ async fn test_multiple_channel_creation() {
 
     // Start and connect the device
     device
-        .wait_for_state(ConnectionState::Connected, Duration::from_secs(5))
+        .wait_for_state(SignalingConnectionState::Connected, Duration::from_secs(5))
         .await
         .expect("Device did not reach Connected state");
 
@@ -210,7 +211,7 @@ async fn test_non_initial_message_rejected() {
 
     // Start and connect the device
     device
-        .wait_for_state(ConnectionState::Connected, Duration::from_secs(5))
+        .wait_for_state(SignalingConnectionState::Connected, Duration::from_secs(5))
         .await
         .expect("Device did not reach Connected state");
 
@@ -254,7 +255,7 @@ async fn test_non_initial_message_rejected() {
     // Try to send a message to the now-closed channel
     // This should be handled gracefully (no crash)
     // The device should still be in Connected state
-    assert_eq!(device.connection_state().await, ConnectionState::Connected);
+    assert_eq!(device.connection_state().await, SignalingConnectionState::Connected);
 
     // Cleanup
     device.stop().await; // Stop device("Failed to close device");
@@ -274,7 +275,7 @@ async fn test_channel_receives_messages() {
 
     // Start and connect the device
     device
-        .wait_for_state(ConnectionState::Connected, Duration::from_secs(5))
+        .wait_for_state(SignalingConnectionState::Connected, Duration::from_secs(5))
         .await
         .expect("Device did not reach Connected state");
 
@@ -322,7 +323,7 @@ async fn test_channel_receives_messages() {
     // At this point, the channel should have processed the messages
     // The messages go through the reliability layer and are queued in the channel
     // For now, we just verify the device is still connected
-    assert_eq!(device.connection_state().await, ConnectionState::Connected);
+    assert_eq!(device.connection_state().await, SignalingConnectionState::Connected);
 
     // Cleanup
     test.disconnect_client(&client_id)

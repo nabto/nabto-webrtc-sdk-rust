@@ -27,6 +27,7 @@ pub mod types;
 pub mod util;
 
 pub use error::{Error, Result};
+pub use common::{SignalingChannelState, SignalingConnectionState};
 
 #[cfg(test)]
 mod tests {
@@ -36,6 +37,6 @@ mod tests {
     fn test_lib_imports() {
         // Verify that core types are accessible
         let _: Option<Error> = None;
-        let _: Option<device::ConnectionState> = None;
+        let _: Option<common::SignalingConnectionState> = None;
     }
 }

@@ -12,7 +12,8 @@
 mod common;
 
 use common::{DeviceTestInstance, DeviceTestOptions};
-use nabto_webrtc::device::{ChannelState, ConnectionState, DeviceEvent};
+use nabto_webrtc::device::DeviceEvent;
+use nabto_webrtc::common::{SignalingChannelState, SignalingConnectionState};
 use std::time::Duration;
 
 /// Device Client Test 1:
@@ -34,7 +35,7 @@ async fn test_device_client_success() {
 
     // Wait for device to connect
     device
-        .wait_for_state(ConnectionState::Connected, Duration::from_secs(5))
+        .wait_for_state(SignalingConnectionState::Connected, Duration::from_secs(5))
         .await
         .expect("Device did not reach Connected state");
 
@@ -82,9 +83,9 @@ async fn test_device_client_success() {
                     // Note: We can no longer check channel state directly since we don't have the channel
                     // We only have the handle. Channel state would need to be tracked separately or
                     // provided in the event.
-                    channel_state = Some(ChannelState::Connected);
+                    channel_state = Some(SignalingChannelState::Connected);
                     channel_found = true;
-                    println!("  Channel state: {:?}", ChannelState::Connected);
+                    println!("  Channel state: {:?}", SignalingChannelState::Connected);
                 }
                 DeviceEvent::StateChanged {
                     old_state,
@@ -107,7 +108,7 @@ async fn test_device_client_success() {
     // Verify the channel is in CONNECTED state
     assert_eq!(
         channel_state,
-        Some(ChannelState::Connected),
+        Some(SignalingChannelState::Connected),
         "Expected channel to be in CONNECTED state"
     );
 
@@ -145,7 +146,7 @@ async fn test_device_client_disconnect() {
     let (device, mut event_rx) = test.start_signaling_device();
 
     device
-        .wait_for_state(ConnectionState::Connected, Duration::from_secs(5))
+        .wait_for_state(SignalingConnectionState::Connected, Duration::from_secs(5))
         .await
         .expect("Device did not reach Connected state");
 
@@ -257,7 +258,7 @@ async fn test_device_multiple_clients() {
     let (device, mut event_rx) = test.start_signaling_device();
 
     device
-        .wait_for_state(ConnectionState::Connected, Duration::from_secs(5))
+        .wait_for_state(SignalingConnectionState::Connected, Duration::from_secs(5))
         .await
         .expect("Device did not reach Connected state");
 
@@ -382,7 +383,7 @@ async fn test_device_channel_close() {
     let (device, mut event_rx) = test.start_signaling_device();
 
     device
-        .wait_for_state(ConnectionState::Connected, Duration::from_secs(5))
+        .wait_for_state(SignalingConnectionState::Connected, Duration::from_secs(5))
         .await
         .expect("Device did not reach Connected state");
 

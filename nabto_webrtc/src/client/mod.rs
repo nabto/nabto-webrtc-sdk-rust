@@ -14,12 +14,11 @@ use crate::common::websocket::ConnectionEvent;
 use crate::common::websocket::WebSocketConfig;
 use crate::common::websocket::WebSocketConnection;
 use crate::common::websocket::WebSocketHandle;
-use crate::device::ChannelHandle;
-use crate::device::ChannelRequest;
-use crate::device::ConnectionState;
-use crate::device::SignalingChannel;
-use crate::device::SignalingService;
-use crate::device::routing::RoutingMessage;
+use crate::common::routing::RoutingMessage;
+use crate::common::channel::ChannelHandle;
+use crate::common::channel::ChannelRequest;
+use crate::common::channel::SignalingChannel;
+use crate::common::channel::SignalingService;
 
 pub enum SignalingClientEvent {
     Message(JsonValue),
@@ -103,7 +102,7 @@ impl SignalingClient {
             };
 
             if device_online {
-                client.channel.set_state(crate::device::ChannelState::Connected);
+                client.channel.set_state(crate::SignalingChannelState::Connected);
             }
 
             Ok((client, event_rx))
@@ -296,7 +295,7 @@ impl SignalingService for SignalingClientService {
 
     }
 
-    async fn send_error(&self, channel_id: &str, error: crate::device::ErrorInfo) {
+    async fn send_error(&self, channel_id: &str, error: crate::common::ErrorInfo) {
         todo!()
     }
 
@@ -310,7 +309,7 @@ impl SignalingService for SignalingClient {
         self.service.send_routing_message(channel_id, message).await;
     }
 
-    async fn send_error(&self, channel_id: &str, error: crate::device::ErrorInfo) {
+    async fn send_error(&self, channel_id: &str, error: crate::common::ErrorInfo) {
         self.service.send_error(channel_id, error).await;
     }
 

@@ -2,7 +2,7 @@ use super::message_transport::{MessageTransportEvent, State, MessageTransportMod
 use super::message_encoder::{IceServer, MessageEncoder, SignalingMessage, WebrtcSignalingMessage};
 use super::signing::{JwtMessageSigner, MessageSigner, NoneMessageSigner};
 use crate::client::SignalingClient;
-use crate::device::ChannelHandle;
+use crate::common::channel::ChannelHandle;
 use crate::{Error, Result};
 use serde_json::Value as JsonValue;
 use std::sync::{Arc, Mutex};
