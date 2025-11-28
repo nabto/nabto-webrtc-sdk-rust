@@ -15,6 +15,26 @@ pub struct HttpApi {
     client: reqwest::Client,
 }
 
+#[derive(Debug, Serialize)]
+struct ClientConnectRequest {
+    #[serde(rename = "deviceId")]
+    device_id: String,
+    #[serde(rename = "productId")]
+    product_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ClientConnectResponse {
+    #[serde(rename = "signalingUrl")]
+    pub signaling_url: String,
+    #[serde(rename = "deviceOnline")]
+    pub device_online: Option<bool>,
+    #[serde(rename = "channelId")]
+    pub channel_id: Option<String>,
+    #[serde(rename = "reconnectToken")]
+    pub reconnect_token: Option<String>,
+}
+
 /// Request body for device connect
 #[derive(Debug, Serialize)]
 struct DeviceConnectRequest {
@@ -74,6 +94,31 @@ impl HttpApi {
             device_id,
             client: reqwest::Client::new(),
         }
+    }
+
+    pub async fn client_connect(&self, auth_token: Option<&str>) -> Result<ClientConnectResponse> {
+        let url = format!("{}/v1/client/connect", self.endpoint_url);
+
+        let request_body = ClientConnectRequest {
+            product_id: self.product_id.clone(),
+            device_id: self.device_id.clone(),
+        };
+
+        let mut request = self
+            .client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .json(&request_body);
+
+        if let Some(token) = auth_token {
+            request = request.header("Authorization", format!("Bearer {}", token));
+        }
+
+        let response = request.send().await.map_err(|e| {
+            Error::Connection(format!("Failed to send client connect request: {}", e))
+        })?;
+
+        self.handle_response(response).await
     }
 
     /// Make a device connect request

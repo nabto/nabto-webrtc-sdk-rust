@@ -11,19 +11,22 @@
 //! # Example
 //!
 //! ```no_run
-//! use nabto_webrtc_sdk::device::{SignalingDevice, SignalingDeviceOptions};
-//! use nabto_webrtc_sdk::util::{DeviceMessageTransport, SecurityMode};
+//! use nabto_webrtc::device::{SignalingDevice, SignalingDeviceOptions};
+//! use nabto_webrtc::util::{DeviceMessageTransport, SecurityMode};
 //!
 //! # async fn example() {
 //! // Create a device...
 //! # }
 //! ```
 
+pub mod client;
+pub mod common;
 pub mod device;
 pub mod error;
 pub mod types;
 pub mod util;
 
+pub use common::{SignalingChannelState, SignalingConnectionState};
 pub use error::{Error, Result};
 
 #[cfg(test)]
@@ -34,6 +37,6 @@ mod tests {
     fn test_lib_imports() {
         // Verify that core types are accessible
         let _: Option<Error> = None;
-        let _: Option<device::ConnectionState> = None;
+        let _: Option<common::SignalingConnectionState> = None;
     }
 }

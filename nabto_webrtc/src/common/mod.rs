@@ -1,8 +1,16 @@
-//! State definitions for signaling connections and channels
+pub mod channel;
+pub mod connection;
+pub mod http;
+pub mod reliability;
+pub mod routing;
+pub mod websocket;
 
-/// Connection state between the device and the signaling service
+pub use connection::{ConnectionEvent, WebSocketConfig, WebSocketConnection, WebSocketHandle};
+pub use http::{HttpApi, IceServer};
+pub use routing::{error_codes, ErrorInfo, RoutingMessage};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConnectionState {
+pub enum SignalingConnectionState {
     /// Initial state
     New,
     /// Attempting to connect
@@ -19,7 +27,7 @@ pub enum ConnectionState {
 
 /// Channel state between device and client peers
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChannelState {
+pub enum SignalingChannelState {
     /// Initial state
     New,
     /// Peer is connected

@@ -8,9 +8,10 @@
 //! - Event emission for WebRTC messages, errors, and setup completion
 
 use super::message_encoder::{IceServer, MessageEncoder, SignalingMessage, WebrtcSignalingMessage};
+use super::message_transport::{MessageTransportEvent, MessageTransportMode, State};
 use super::signing::{JwtMessageSigner, MessageSigner, NoneMessageSigner};
-use crate::device::routing::ErrorInfo;
-use crate::device::ChannelHandle;
+use crate::common::channel::ChannelHandle;
+use crate::common::routing::ErrorInfo;
 use crate::{Error, Result};
 use serde_json::Value as JsonValue;
 use std::future::Future;
@@ -31,7 +32,8 @@ pub enum SecurityMode {
 }
 
 /// Callback type for requesting ICE servers
-pub type IceServerProvider = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<Vec<IceServer>>> + Send>> + Send + Sync>;
+pub type IceServerProvider =
+    Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<Vec<IceServer>>> + Send>> + Send + Sync>;
 
 /// Device message transport options
 #[derive(Clone)]
@@ -41,37 +43,6 @@ pub struct DeviceMessageTransportOptions {
     pub ice_server_provider: Option<IceServerProvider>,
 }
 
-/// Events emitted by the DeviceMessageTransport
-#[derive(Debug)]
-pub enum DeviceTransportEvent {
-    /// WebRTC signaling message received
-    WebrtcSignalingMessage(WebrtcSignalingMessage),
-    /// Setup completed with optional ICE servers
-    SetupDone(Option<Vec<IceServer>>),
-    /// Error occurred
-    Error(String),
-}
-
-/// State of the DeviceMessageTransport
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum State {
-    /// Waiting for the first message from the client
-    WaitFirstMessage,
-    /// In setup phase (exchanging SETUP_REQUEST/RESPONSE)
-    Setup,
-    /// In signaling phase (exchanging WebRTC messages)
-    Signaling,
-}
-
-/// Transport mode for perfect negotiation
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MessageTransportMode {
-    /// Client mode (impolite peer in perfect negotiation)
-    Client,
-    /// Device mode (polite peer in perfect negotiation)
-    Device,
-}
-
 /// Device message transport implementation
 pub struct DeviceMessageTransport {
     handle: ChannelHandle,
@@ -79,8 +50,8 @@ pub struct DeviceMessageTransport {
     signer: Arc<Mutex<Option<Box<dyn MessageSigner>>>>,
     state: Arc<Mutex<State>>,
     options: DeviceMessageTransportOptions,
-    event_tx: mpsc::UnboundedSender<DeviceTransportEvent>,
-    event_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<DeviceTransportEvent>>>>,
+    event_tx: mpsc::UnboundedSender<MessageTransportEvent>,
+    event_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<MessageTransportEvent>>>>,
 }
 
 impl DeviceMessageTransport {
@@ -116,7 +87,7 @@ impl DeviceMessageTransport {
                     eprintln!("Error handling channel message: {:?}", e);
                     let _ = transport_clone
                         .event_tx
-                        .send(DeviceTransportEvent::Error(e.to_string()));
+                        .send(MessageTransportEvent::Error(e.to_string()));
                 }
             }
         });
@@ -138,7 +109,7 @@ impl DeviceMessageTransport {
     }
 
     /// Get the event receiver (can only be called once)
-    pub fn take_event_receiver(&self) -> Option<mpsc::UnboundedReceiver<DeviceTransportEvent>> {
+    pub fn take_event_receiver(&self) -> Option<mpsc::UnboundedReceiver<MessageTransportEvent>> {
         self.event_rx.lock().unwrap().take()
     }
 
@@ -315,7 +286,7 @@ impl DeviceMessageTransport {
     async fn emit_webrtc_signaling_message(&self, message: WebrtcSignalingMessage) {
         let _ = self
             .event_tx
-            .send(DeviceTransportEvent::WebrtcSignalingMessage(message));
+            .send(MessageTransportEvent::WebrtcSignalingMessage(message));
     }
 
     /// Emit setup done event
@@ -323,7 +294,7 @@ impl DeviceMessageTransport {
         *self.state.lock().unwrap() = State::Signaling;
         let _ = self
             .event_tx
-            .send(DeviceTransportEvent::SetupDone(ice_servers));
+            .send(MessageTransportEvent::SetupDone(ice_servers));
     }
 
     /// Emit error event
@@ -338,7 +309,7 @@ impl DeviceMessageTransport {
         // Emit error event
         let _ = self
             .event_tx
-            .send(DeviceTransportEvent::Error(error.to_string()));
+            .send(MessageTransportEvent::Error(error.to_string()));
     }
 
     /// Get the channel ID
@@ -357,7 +328,7 @@ impl Clone for DeviceMessageTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::device::ChannelRequest;
+    use crate::common::channel::ChannelRequest;
 
     #[tokio::test]
     async fn test_transport_mode() {

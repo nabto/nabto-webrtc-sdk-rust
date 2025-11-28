@@ -3,26 +3,17 @@
 //! This module contains the core device-side WebRTC signaling implementation,
 //! including connection management, channel handling, and protocol layers.
 
-mod channel;
-mod connection;
-mod http;
-mod reliability;
-pub(crate) mod routing; // Visible to util module
-mod state;
 mod token;
 
-// Re-export public types
-pub use channel::{
-    ChannelHandle, ChannelRequest, SignalingChannel, SignalingChannelEventHandler, SignalingService,
-};
-pub use connection::{ConnectionEvent, WebSocketConfig, WebSocketConnection, WebSocketHandle};
-pub use http::{HttpApi, IceServer};
-pub use routing::ErrorInfo; // Re-export ErrorInfo for use with SignalingService
-pub use state::{ChannelState, ConnectionState};
 pub use token::DeviceTokenGenerator;
 
-use routing::RoutingMessage;
-
+use crate::common::channel::{ChannelHandle, ChannelRequest, SignalingChannel, SignalingService};
+use crate::common::routing::error_codes;
+use crate::common::routing::ErrorInfo;
+use crate::common::routing::RoutingMessage;
+use crate::common::{ConnectionEvent, WebSocketConfig, WebSocketConnection, WebSocketHandle};
+use crate::common::{HttpApi, IceServer};
+use crate::common::{SignalingChannelState, SignalingConnectionState};
 use crate::{Error, Result};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -62,8 +53,8 @@ pub enum DeviceEvent {
 
     /// Connection state changed
     StateChanged {
-        old_state: ConnectionState,
-        new_state: ConnectionState,
+        old_state: SignalingConnectionState,
+        new_state: SignalingConnectionState,
     },
 }
 
@@ -110,7 +101,7 @@ pub struct SignalingDeviceOptions {
 pub struct SignalingDevice {
     http_api: HttpApi,
     options: SignalingDeviceOptions,
-    state: ConnectionState,
+    state: SignalingConnectionState,
 
     // Event channel for emitting device events
     device_event_tx: mpsc::Sender<DeviceEvent>,
@@ -164,7 +155,7 @@ impl SignalingDevice {
         let device = Self {
             http_api,
             options,
-            state: ConnectionState::New,
+            state: SignalingConnectionState::New,
             device_event_tx,
             command_rx: Some(command_rx),
             ws_handle: None,
@@ -187,12 +178,12 @@ impl SignalingDevice {
     ///
     /// The user should spawn this on a tokio task:
     /// ```no_run
-    /// # use nabto_webrtc_sdk::device::{SignalingDevice, SignalingDeviceOptions};
+    /// # use nabto_webrtc::device::{SignalingDevice, SignalingDeviceOptions};
     /// # #[tokio::main]
     /// # async fn main() {
     /// # let token_generator = Box::new(|| {
     /// #     Box::pin(async { Ok("token".to_string()) })
-    /// #         as std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, nabto_webrtc_sdk::Error>> + Send>>
+    /// #         as std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, nabto_webrtc::Error>> + Send>>
     /// # });
     /// # let options = SignalingDeviceOptions {
     /// #     endpoint_url: None,
@@ -211,7 +202,7 @@ impl SignalingDevice {
     /// # }
     /// ```
     pub async fn run(&mut self) -> Result<()> {
-        if self.state != ConnectionState::New {
+        if self.state != SignalingConnectionState::New {
             return Err(Error::Configuration(
                 "Run can only be called once".to_string(),
             ));
@@ -227,9 +218,9 @@ impl SignalingDevice {
 
             // Connection/reconnection logic
             match self.state {
-                ConnectionState::New | ConnectionState::WaitRetry => {
+                SignalingConnectionState::New | SignalingConnectionState::WaitRetry => {
                     // Calculate retry delay if we're in WaitRetry
-                    if self.state == ConnectionState::WaitRetry {
+                    if self.state == SignalingConnectionState::WaitRetry {
                         let wait_seconds = self.calculate_reconnect_delay();
                         eprintln!("Waiting {} seconds before reconnecting...", wait_seconds);
 
@@ -251,11 +242,11 @@ impl SignalingDevice {
                     }
 
                     // Attempt to connect
-                    self.set_state(ConnectionState::Connecting);
+                    self.set_state(SignalingConnectionState::Connecting);
 
                     match self.try_connect().await {
                         Ok(()) => {
-                            self.set_state(ConnectionState::Connected);
+                            self.set_state(SignalingConnectionState::Connected);
                             self.connected_at = Some(Instant::now());
                             self.reconnect_counter = 0;
                             eprintln!("Successfully connected to signaling service");
@@ -265,12 +256,12 @@ impl SignalingDevice {
                         }
                         Err(e) => {
                             eprintln!("Connection failed: {:?}", e);
-                            self.set_state(ConnectionState::WaitRetry);
+                            self.set_state(SignalingConnectionState::WaitRetry);
                             self.reconnect_counter += 1;
                         }
                     }
                 }
-                ConnectionState::Connected => {
+                SignalingConnectionState::Connected => {
                     // Process WebSocket events, channel requests, and commands
                     if let Some(ws_rx) = &mut self.ws_event_rx {
                         if let Some(ch_rx) = &mut self.channel_request_rx {
@@ -319,17 +310,17 @@ impl SignalingDevice {
                         break;
                     }
                 }
-                ConnectionState::Connecting => {
+                SignalingConnectionState::Connecting => {
                     // Shouldn't stay in Connecting state during the loop
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
-                ConnectionState::Closed => {
+                SignalingConnectionState::Closed => {
                     // Device is closed, exit loop
                     break;
                 }
-                ConnectionState::Failed => {
+                SignalingConnectionState::Failed => {
                     // Failed state, transition to retry
-                    self.set_state(ConnectionState::WaitRetry);
+                    self.set_state(SignalingConnectionState::WaitRetry);
                     self.reconnect_counter += 1;
                 }
             }
@@ -346,7 +337,7 @@ impl SignalingDevice {
     }
 
     /// Set the connection state and emit a StateChanged event
-    fn set_state(&mut self, new_state: ConnectionState) {
+    fn set_state(&mut self, new_state: SignalingConnectionState) {
         if self.state != new_state {
             let old_state = self.state;
             self.state = new_state;
@@ -374,7 +365,7 @@ impl SignalingDevice {
         self.ws_event_rx = None;
 
         // Transition to WaitRetry
-        self.set_state(ConnectionState::WaitRetry);
+        self.set_state(SignalingConnectionState::WaitRetry);
     }
 
     /// Retransmit unacked messages for all channels after reconnection
@@ -440,8 +431,18 @@ impl SignalingDevice {
                 channel_id,
                 message,
             } => {
-                eprintln!("[DEVICE] Handling SendMessage request for channel {}", channel_id);
-                eprintln!("[DEVICE] Message preview: {:?}", serde_json::to_string(&message).unwrap_or_else(|_| "failed to serialize".to_string()).chars().take(200).collect::<String>());
+                eprintln!(
+                    "[DEVICE] Handling SendMessage request for channel {}",
+                    channel_id
+                );
+                eprintln!(
+                    "[DEVICE] Message preview: {:?}",
+                    serde_json::to_string(&message)
+                        .unwrap_or_else(|_| "failed to serialize".to_string())
+                        .chars()
+                        .take(200)
+                        .collect::<String>()
+                );
 
                 // Send through the channel's reliability layer
                 // We need to remove the channel temporarily to avoid borrowing issues
@@ -512,7 +513,7 @@ impl SignalingDevice {
             let _ = handle.close().await;
         }
 
-        self.set_state(ConnectionState::Closed);
+        self.set_state(SignalingConnectionState::Closed);
     }
 
     /// Request ICE servers from the signaling service
@@ -538,7 +539,7 @@ impl SignalingDevice {
     ///
     /// Note: This is a snapshot of the state. In a multi-threaded environment,
     /// the state may change immediately after this call returns.
-    pub fn connection_state(&self) -> ConnectionState {
+    pub fn connection_state(&self) -> SignalingConnectionState {
         self.state
     }
 
@@ -578,7 +579,7 @@ impl SignalingDevice {
                     // Create new channel with message channel set up
                     let channel_for_map = SignalingChannel::new(channel_id.clone());
                     let (mut channel_with_rx, message_rx) = channel_for_map.with_message_channel();
-                    channel_with_rx.set_state(ChannelState::Connected);
+                    channel_with_rx.set_state(SignalingChannelState::Connected);
 
                     // Set the device sender so the channel can send messages back
                     channel_with_rx.set_device_sender(self.channel_request_tx.clone());
@@ -618,7 +619,7 @@ impl SignalingDevice {
                         channel_id
                     );
                     let error = ErrorInfo {
-                        code: routing::error_codes::CHANNEL_NOT_FOUND.to_string(),
+                        code: error_codes::CHANNEL_NOT_FOUND.to_string(),
                         message: Some(format!("Channel {} not found", channel_id)),
                     };
                     self.send_error(&channel_id, error).await;
@@ -674,7 +675,7 @@ impl SignalingDevice {
 /// Implement SignalingService trait so channels can send messages through the device
 impl SignalingService for SignalingDevice {
     async fn send_routing_message(&self, channel_id: &str, message: JsonValue) {
-        if self.state != ConnectionState::Connected {
+        if self.state != SignalingConnectionState::Connected {
             return; // Can't send if not connected
         }
 
@@ -696,7 +697,7 @@ impl SignalingService for SignalingDevice {
     }
 
     async fn send_error(&self, channel_id: &str, error: ErrorInfo) {
-        if self.state != ConnectionState::Connected {
+        if self.state != SignalingConnectionState::Connected {
             return;
         }
 

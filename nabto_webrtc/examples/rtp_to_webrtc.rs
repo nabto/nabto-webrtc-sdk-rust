@@ -19,11 +19,11 @@
 
 use anyhow::Result;
 use clap::Parser;
-use nabto_webrtc_sdk::device::{
-    ChannelHandle, DeviceTokenGenerator, HttpApi, SignalingDevice, SignalingDeviceOptions,
-};
-use nabto_webrtc_sdk::util::{
-    DeviceMessageTransport, DeviceMessageTransportOptions, DeviceTransportEvent, SecurityMode,
+use nabto_webrtc::common::channel::ChannelHandle;
+use nabto_webrtc::common::HttpApi;
+use nabto_webrtc::device::{DeviceTokenGenerator, SignalingDevice, SignalingDeviceOptions};
+use nabto_webrtc::util::{
+    DeviceMessageTransport, DeviceMessageTransportOptions, MessageTransportEvent, SecurityMode,
     WebrtcSignalingMessage,
 };
 use serde_json::Value as JsonValue;
@@ -37,7 +37,6 @@ use tokio::sync::{mpsc, Mutex};
 use webrtc::api::interceptor_registry::{configure_rtcp_reports, configure_twcc_receiver_only};
 use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_VP8};
 use webrtc::api::{APIBuilder, API};
-use webrtc::ice_transport::ice_credential_type::RTCIceCredentialType;
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::interceptor::registry::Registry;
 use webrtc::peer_connection::configuration::RTCConfiguration;
@@ -88,7 +87,7 @@ impl RtcConnectionHandler {
     /// Create the peer connection with ICE servers
     async fn create_peer_connection(
         &mut self,
-        ice_servers: Option<Vec<nabto_webrtc_sdk::util::IceServer>>,
+        ice_servers: Option<Vec<nabto_webrtc::util::IceServer>>,
     ) -> Result<()> {
         let channel_id = self.handle.channel_id();
 
@@ -100,29 +99,29 @@ impl RtcConnectionHandler {
             for server in servers {
                 // Only add servers that have the required credentials for TURN
                 // or are STUN servers (no credentials needed)
-                let is_turn = server.urls.iter().any(|url| url.starts_with("turn:") || url.starts_with("turns:"));
+                let is_turn = server
+                    .urls
+                    .iter()
+                    .any(|url| url.starts_with("turn:") || url.starts_with("turns:"));
 
                 if is_turn && (server.username.is_none() || server.credential.is_none()) {
-                    eprintln!("[{}] Skipping TURN server with missing credentials: {:?}", channel_id, server);
+                    eprintln!(
+                        "[{}] Skipping TURN server with missing credentials: {:?}",
+                        channel_id, server
+                    );
                     continue;
                 }
-
-                // Set credential type to Password for TURN servers with credentials
-                let credential_type = if is_turn {
-                    RTCIceCredentialType::Password
-                } else {
-                    RTCIceCredentialType::Unspecified
-                };
 
                 let rtc_server = RTCIceServer {
                     urls: server.urls.clone(),
                     username: server.username.clone().unwrap_or_default(),
                     credential: server.credential.clone().unwrap_or_default(),
-                    credential_type,
                 };
 
-                println!("[{}] Adding ICE server - urls: {:?}, username: '{}', credential: '{}', type: {:?}",
-                    channel_id, rtc_server.urls, rtc_server.username, rtc_server.credential, rtc_server.credential_type);
+                println!(
+                    "[{}] Adding ICE server - urls: {:?}, username: '{}', credential: '{}'",
+                    channel_id, rtc_server.urls, rtc_server.username, rtc_server.credential
+                );
 
                 rtc_ice_servers.push(rtc_server);
             }
@@ -133,7 +132,11 @@ impl RtcConnectionHandler {
             ..Default::default()
         };
 
-        println!("[{}] Creating peer connection with {} ICE servers", channel_id, rtc_ice_servers.len());
+        println!(
+            "[{}] Creating peer connection with {} ICE servers",
+            channel_id,
+            rtc_ice_servers.len()
+        );
         let peer_connection = match self.api.new_peer_connection(config).await {
             Ok(pc) => {
                 println!("[{}] Successfully created peer connection", channel_id);
@@ -172,17 +175,22 @@ impl RtcConnectionHandler {
                     // Convert RTCIceCandidate to JSON to get the candidate string
                     match candidate.to_json() {
                         Ok(candidate_init) => {
-                            println!("[{}] Discovered local ICE candidate: {}", channel_id, candidate_init.candidate);
+                            println!(
+                                "[{}] Discovered local ICE candidate: {}",
+                                channel_id, candidate_init.candidate
+                            );
 
                             // Send candidate to remote peer
-                            let ice_candidate = nabto_webrtc_sdk::util::IceCandidate {
+                            let ice_candidate = nabto_webrtc::util::IceCandidate {
                                 candidate: candidate_init.candidate,
                                 sdp_mid: candidate_init.sdp_mid,
                                 sdp_m_line_index: candidate_init.sdp_mline_index.map(|i| i as u32),
                                 username_fragment: candidate_init.username_fragment,
                             };
 
-                            let msg = WebrtcSignalingMessage::Candidate { candidate: ice_candidate };
+                            let msg = WebrtcSignalingMessage::Candidate {
+                                candidate: ice_candidate,
+                            };
 
                             if let Err(e) = transport.send_webrtc_signaling_message(&msg).await {
                                 eprintln!("[{}] Failed to send ICE candidate: {}", channel_id, e);
@@ -191,7 +199,10 @@ impl RtcConnectionHandler {
                             }
                         }
                         Err(e) => {
-                            eprintln!("[{}] Failed to convert ICE candidate to JSON: {}", channel_id, e);
+                            eprintln!(
+                                "[{}] Failed to convert ICE candidate to JSON: {}",
+                                channel_id, e
+                            );
                         }
                     }
                 } else {
@@ -226,7 +237,7 @@ impl RtcConnectionHandler {
                     }
 
                     // Send offer through transport
-                    let desc = nabto_webrtc_sdk::util::SessionDescription {
+                    let desc = nabto_webrtc::util::SessionDescription {
                         desc_type: "offer".to_string(),
                         sdp: offer.sdp,
                     };
@@ -272,7 +283,7 @@ impl RtcConnectionHandler {
         // Handle transport events
         while let Some(event) = event_rx.recv().await {
             match event {
-                DeviceTransportEvent::SetupDone(ice_servers) => {
+                MessageTransportEvent::SetupDone(ice_servers) => {
                     println!(
                         "[{}] Setup completed, ICE servers: {:?}",
                         channel_id, ice_servers
@@ -282,11 +293,11 @@ impl RtcConnectionHandler {
                     self.create_peer_connection(ice_servers).await?;
                     println!("[{}] Peer connection ready", channel_id);
                 }
-                DeviceTransportEvent::WebrtcSignalingMessage(msg) => {
+                MessageTransportEvent::WebrtcSignalingMessage(msg) => {
                     println!("[{}] Received WebRTC signaling message", channel_id);
                     self.handle_webrtc_message(msg).await?;
                 }
-                DeviceTransportEvent::Error(err) => {
+                MessageTransportEvent::Error(err) => {
                     eprintln!("[{}] Transport error: {}", channel_id, err);
                     return Err(anyhow::anyhow!("Transport error: {}", err));
                 }
@@ -355,7 +366,7 @@ impl RtcConnectionHandler {
                     );
 
                     // Send answer back through transport
-                    let desc = nabto_webrtc_sdk::util::SessionDescription {
+                    let desc = nabto_webrtc::util::SessionDescription {
                         desc_type: "answer".to_string(),
                         sdp: answer.sdp,
                     };
@@ -504,7 +515,7 @@ async fn main() -> Result<()> {
         Box::pin(async move {
             // Generate JWT token with the private key
             generator.generate_token()
-        }) as Pin<Box<dyn Future<Output = Result<String, nabto_webrtc_sdk::Error>> + Send>>
+        }) as Pin<Box<dyn Future<Output = Result<String, nabto_webrtc::Error>> + Send>>
     });
 
     // Clone for later use in URL printing and ICE server provider
@@ -529,9 +540,8 @@ async fn main() -> Result<()> {
 
     // Create an ICE server provider that uses HTTP API directly
     // This avoids the deadlock by not requiring the device lock
-    let endpoint_url = endpoint_url_opt.unwrap_or_else(|| {
-        format!("https://{}.webrtc.nabto.net", product_id_for_url)
-    });
+    let endpoint_url = endpoint_url_opt
+        .unwrap_or_else(|| format!("https://{}.webrtc.nabto.net", product_id_for_url));
 
     // Clone values needed for ICE server provider
     let product_id_for_ice = product_id_for_url.clone();
@@ -549,16 +559,13 @@ async fn main() -> Result<()> {
 
         Box::pin(async move {
             // Create HTTP API client
-            let http_api = HttpApi::new(
-                endpoint_url,
-                product_id.clone(),
-                device_id.clone(),
-            );
+            let http_api = HttpApi::new(endpoint_url, product_id.clone(), device_id.clone());
 
             // Generate token
             let token_gen = DeviceTokenGenerator::new(product_id, device_id, private_key);
-            let token = token_gen.generate_token()
-                .map_err(|e| nabto_webrtc_sdk::Error::Other(format!("Token generation failed: {}", e)))?;
+            let token = token_gen.generate_token().map_err(|e| {
+                nabto_webrtc::Error::Other(format!("Token generation failed: {}", e))
+            })?;
 
             // Request ICE servers
             let http_servers = http_api.request_ice_servers(&token).await?;
@@ -566,7 +573,7 @@ async fn main() -> Result<()> {
             // Convert to signaling protocol format
             let ice_servers = http_servers
                 .into_iter()
-                .map(|s| nabto_webrtc_sdk::util::IceServer {
+                .map(|s| nabto_webrtc::util::IceServer {
                     urls: s.urls,
                     username: s.username,
                     credential: s.credential,
@@ -574,8 +581,31 @@ async fn main() -> Result<()> {
                 .collect();
 
             Ok(ice_servers)
-        }) as Pin<Box<dyn Future<Output = Result<Vec<nabto_webrtc_sdk::util::IceServer>, nabto_webrtc_sdk::Error>> + Send>>
-    }) as Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<Vec<nabto_webrtc_sdk::util::IceServer>, nabto_webrtc_sdk::Error>> + Send>> + Send + Sync>;
+        })
+            as Pin<
+                Box<
+                    dyn Future<
+                            Output = Result<
+                                Vec<nabto_webrtc::util::IceServer>,
+                                nabto_webrtc::Error,
+                            >,
+                        > + Send,
+                >,
+            >
+    })
+        as Arc<
+            dyn Fn() -> Pin<
+                    Box<
+                        dyn Future<
+                                Output = Result<
+                                    Vec<nabto_webrtc::util::IceServer>,
+                                    nabto_webrtc::Error,
+                                >,
+                            > + Send,
+                    >,
+                > + Send
+                + Sync,
+        >;
 
     // Wrap device in Arc<Mutex> only for the run loop
     let device = Arc::new(Mutex::new(device));
@@ -587,7 +617,7 @@ async fn main() -> Result<()> {
     tokio::spawn(async move {
         while let Some(event) = event_rx.recv().await {
             match event {
-                nabto_webrtc_sdk::device::DeviceEvent::NewChannel {
+                nabto_webrtc::device::DeviceEvent::NewChannel {
                     handle,
                     message_rx,
                     authorized,
@@ -652,7 +682,7 @@ async fn main() -> Result<()> {
                         }
                     });
                 }
-                nabto_webrtc_sdk::device::DeviceEvent::StateChanged {
+                nabto_webrtc::device::DeviceEvent::StateChanged {
                     old_state,
                     new_state,
                 } => {
@@ -740,7 +770,6 @@ pub fn register_interceptors(
     mut registry: Registry,
     media_engine: &mut MediaEngine,
 ) -> Result<Registry> {
-
     //registry = configure_nack(registry, media_engine);
 
     registry = configure_rtcp_reports(registry);

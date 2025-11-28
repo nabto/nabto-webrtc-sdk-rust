@@ -1,8 +1,8 @@
 //! Signaling channel implementation
 
 use super::reliability::{Reliability, ReliabilityMessage};
-use super::routing::{error_codes, ErrorInfo};
-use super::state::ChannelState;
+use crate::common::routing::{error_codes, ErrorInfo};
+use crate::common::SignalingChannelState;
 use crate::{Error, Result};
 use serde_json::Value as JsonValue;
 use std::collections::VecDeque;
@@ -84,10 +84,18 @@ impl ChannelHandle {
 /// Trait for SignalingChannel to communicate with SignalingDevice
 pub trait SignalingService {
     /// Send a routing message on this channel
-    fn send_routing_message(&self, channel_id: &str, message: JsonValue) -> impl std::future::Future<Output = ()> + Send;
+    fn send_routing_message(
+        &self,
+        channel_id: &str,
+        message: JsonValue,
+    ) -> impl std::future::Future<Output = ()> + Send;
 
     /// Send an error message for this channel
-    fn send_error(&self, channel_id: &str, error: ErrorInfo) -> impl std::future::Future<Output = ()> + Send;
+    fn send_error(
+        &self,
+        channel_id: &str,
+        error: ErrorInfo,
+    ) -> impl std::future::Future<Output = ()> + Send;
 
     /// Notify device that this channel is being closed
     fn close_channel(&mut self, channel_id: &str);
@@ -99,7 +107,7 @@ pub trait SignalingChannelEventHandler: Send + Sync {
     fn on_message(&self, message: JsonValue);
 
     /// Called when the channel state changes
-    fn on_channel_state_change(&self, state: ChannelState);
+    fn on_channel_state_change(&self, state: SignalingChannelState);
 
     /// Called when an error occurs
     fn on_error(&self, error: crate::Error);
@@ -119,7 +127,7 @@ enum Operation {
 #[derive(Debug, Clone)]
 pub struct SignalingChannel {
     channel_id: String,
-    state: ChannelState,
+    state: SignalingChannelState,
     reliability: Reliability,
     operations: VecDeque<Operation>,
     handling_operations: bool,
@@ -133,7 +141,7 @@ impl SignalingChannel {
     pub fn new(channel_id: String) -> Self {
         Self {
             channel_id,
-            state: ChannelState::New,
+            state: SignalingChannelState::New,
             reliability: Reliability::new(),
             operations: VecDeque::new(),
             handling_operations: false,
@@ -162,18 +170,25 @@ impl SignalingChannel {
         (self, rx)
     }
 
+    // @TODO: stop-in gap as the above with_message_channel for some reason tries to take ownership
+    pub fn with_msg_channel(&mut self) -> mpsc::Receiver<JsonValue> {
+        let (tx, rx) = mpsc::channel(32);
+        self.message_tx = Some(tx);
+        rx
+    }
+
     /// Get the channel ID
     pub fn channel_id(&self) -> &str {
         &self.channel_id
     }
 
     /// Get the channel state
-    pub fn state(&self) -> ChannelState {
+    pub fn state(&self) -> SignalingChannelState {
         self.state
     }
 
     /// Set the channel state
-    pub fn set_state(&mut self, state: ChannelState) {
+    pub fn set_state(&mut self, state: SignalingChannelState) {
         if self.state == state {
             return; // Skip duplicate state changes
         }
@@ -196,7 +211,9 @@ impl SignalingChannel {
         message: JsonValue,
         service: &S,
     ) -> Result<()> {
-        if self.state == ChannelState::Closed || self.state == ChannelState::Failed {
+        if self.state == SignalingChannelState::Closed
+            || self.state == SignalingChannelState::Failed
+        {
             return Ok(()); // Ignore messages for closed/failed channels
         }
 
@@ -217,7 +234,9 @@ impl SignalingChannel {
                 let ack = self.reliability.create_ack(seq);
                 let ack_json = serde_json::to_value(&ack)
                     .map_err(|e| Error::Signaling(format!("Failed to serialize ACK: {}", e)))?;
-                service.send_routing_message(&self.channel_id, ack_json).await;
+                service
+                    .send_routing_message(&self.channel_id, ack_json)
+                    .await;
             }
         }
 
@@ -226,7 +245,9 @@ impl SignalingChannel {
 
     /// Handle WebSocket reconnection - retransmit unacked messages
     pub async fn handle_websocket_reconnect<S: SignalingService>(&mut self, service: &S) {
-        if self.state == ChannelState::Closed || self.state == ChannelState::Failed {
+        if self.state == SignalingChannelState::Closed
+            || self.state == SignalingChannelState::Failed
+        {
             eprintln!(
                 "[CHANNEL {}] Skipping retransmit - channel state: {:?}",
                 self.channel_id, self.state
@@ -254,11 +275,13 @@ impl SignalingChannel {
 
     /// Handle peer connected notification
     pub async fn handle_peer_connected<S: SignalingService>(&mut self, service: &S) {
-        if self.state == ChannelState::Closed || self.state == ChannelState::Failed {
+        if self.state == SignalingChannelState::Closed
+            || self.state == SignalingChannelState::Failed
+        {
             return;
         }
 
-        self.set_state(ChannelState::Connected);
+        self.set_state(SignalingChannelState::Connected);
 
         // Retransmit unacked messages
         for msg in self.reliability.handle_peer_connected() {
@@ -270,20 +293,24 @@ impl SignalingChannel {
 
     /// Handle peer offline notification
     pub fn handle_peer_offline(&mut self) {
-        if self.state == ChannelState::Closed || self.state == ChannelState::Failed {
+        if self.state == SignalingChannelState::Closed
+            || self.state == SignalingChannelState::Failed
+        {
             return;
         }
-        self.set_state(ChannelState::Disconnected);
+        self.set_state(SignalingChannelState::Disconnected);
     }
 
     /// Handle error for this channel
     pub fn handle_error(&mut self, error: Error) {
-        if self.state == ChannelState::Closed || self.state == ChannelState::Failed {
+        if self.state == SignalingChannelState::Closed
+            || self.state == SignalingChannelState::Failed
+        {
             return;
         }
         // TODO: Emit error event
         eprintln!("Channel {} error: {:?}", self.channel_id, error);
-        self.set_state(ChannelState::Failed);
+        self.set_state(SignalingChannelState::Failed);
     }
 
     /// Send a message to the other peer
@@ -292,7 +319,9 @@ impl SignalingChannel {
         message: JsonValue,
         service: &S,
     ) -> Result<()> {
-        if self.state == ChannelState::Closed || self.state == ChannelState::Failed {
+        if self.state == SignalingChannelState::Closed
+            || self.state == SignalingChannelState::Failed
+        {
             return Err(Error::Signaling(
                 "Cannot send message on closed or failed channel".to_string(),
             ));
@@ -308,8 +337,14 @@ impl SignalingChannel {
 
     /// Send a message to the other peer (async version)
     /// This version sends directly through the WebSocket without going through SignalingService
-    pub async fn send_message_async<S: SignalingService>(&mut self, message: JsonValue, service: &S) -> Result<()> {
-        if self.state == ChannelState::Closed || self.state == ChannelState::Failed {
+    pub async fn send_message_async<S: SignalingService>(
+        &mut self,
+        message: JsonValue,
+        service: &S,
+    ) -> Result<()> {
+        if self.state == SignalingChannelState::Closed
+            || self.state == SignalingChannelState::Failed
+        {
             return Err(Error::Signaling(
                 "Cannot send message on closed or failed channel".to_string(),
             ));
@@ -330,7 +365,9 @@ impl SignalingChannel {
         error_message: Option<&str>,
         service: &S,
     ) {
-        if self.state == ChannelState::Closed || self.state == ChannelState::Failed {
+        if self.state == SignalingChannelState::Closed
+            || self.state == SignalingChannelState::Failed
+        {
             return;
         }
 
@@ -340,16 +377,16 @@ impl SignalingChannel {
         };
 
         service.send_error(&self.channel_id, error).await;
-        self.set_state(ChannelState::Failed);
+        self.set_state(SignalingChannelState::Failed);
     }
 
     /// Close the signaling channel
     pub async fn close<S: SignalingService>(&mut self, service: &mut S) {
-        if self.state == ChannelState::Closed {
+        if self.state == SignalingChannelState::Closed {
             return;
         }
 
-        if self.state != ChannelState::Failed {
+        if self.state != SignalingChannelState::Failed {
             let error = ErrorInfo {
                 code: error_codes::CHANNEL_CLOSED.to_string(),
                 message: Some("The channel has been closed".to_string()),
@@ -358,13 +395,15 @@ impl SignalingChannel {
         }
 
         self.operations.clear();
-        self.set_state(ChannelState::Closed);
+        self.set_state(SignalingChannelState::Closed);
         service.close_channel(&self.channel_id);
     }
 
     /// Process queued operations
     fn handle_operations(&mut self) {
-        if self.state == ChannelState::Closed || self.state == ChannelState::Failed {
+        if self.state == SignalingChannelState::Closed
+            || self.state == SignalingChannelState::Failed
+        {
             return;
         }
 
@@ -380,7 +419,7 @@ impl SignalingChannel {
                     // Initial channel setup already done
                 }
                 Operation::Message(msg) => {
-                    eprintln!("Channel {} received message: {:?}", self.channel_id, msg);
+                    //eprintln!("Channel {} received message: {:?}", self.channel_id, msg);
                     // Send message through channel if available
                     if let Some(tx) = &self.message_tx {
                         // Try to send, ignore if receiver is dropped
