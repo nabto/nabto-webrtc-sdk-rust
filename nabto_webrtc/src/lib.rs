@@ -11,8 +11,8 @@
 //! # Example
 //!
 //! ```no_run
-//! use nabto_webrtc_sdk::device::{SignalingDevice, SignalingDeviceOptions};
-//! use nabto_webrtc_sdk::util::{DeviceMessageTransport, SecurityMode};
+//! use nabto_webrtc::device::{SignalingDevice, SignalingDeviceOptions};
+//! use nabto_webrtc::util::{DeviceMessageTransport, SecurityMode};
 //!
 //! # async fn example() {
 //! // Create a device...

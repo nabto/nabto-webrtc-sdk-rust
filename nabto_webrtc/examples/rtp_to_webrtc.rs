@@ -19,10 +19,10 @@
 
 use anyhow::Result;
 use clap::Parser;
-use nabto_webrtc_sdk::device::{
+use nabto_webrtc::device::{
     ChannelHandle, DeviceTokenGenerator, HttpApi, SignalingDevice, SignalingDeviceOptions,
 };
-use nabto_webrtc_sdk::util::{
+use nabto_webrtc::util::{
     DeviceMessageTransport, DeviceMessageTransportOptions, MessageTransportEvent, SecurityMode,
     WebrtcSignalingMessage,
 };
@@ -87,7 +87,7 @@ impl RtcConnectionHandler {
     /// Create the peer connection with ICE servers
     async fn create_peer_connection(
         &mut self,
-        ice_servers: Option<Vec<nabto_webrtc_sdk::util::IceServer>>,
+        ice_servers: Option<Vec<nabto_webrtc::util::IceServer>>,
     ) -> Result<()> {
         let channel_id = self.handle.channel_id();
 
@@ -166,7 +166,7 @@ impl RtcConnectionHandler {
                             println!("[{}] Discovered local ICE candidate: {}", channel_id, candidate_init.candidate);
 
                             // Send candidate to remote peer
-                            let ice_candidate = nabto_webrtc_sdk::util::IceCandidate {
+                            let ice_candidate = nabto_webrtc::util::IceCandidate {
                                 candidate: candidate_init.candidate,
                                 sdp_mid: candidate_init.sdp_mid,
                                 sdp_m_line_index: candidate_init.sdp_mline_index.map(|i| i as u32),
@@ -217,7 +217,7 @@ impl RtcConnectionHandler {
                     }
 
                     // Send offer through transport
-                    let desc = nabto_webrtc_sdk::util::SessionDescription {
+                    let desc = nabto_webrtc::util::SessionDescription {
                         desc_type: "offer".to_string(),
                         sdp: offer.sdp,
                     };
@@ -346,7 +346,7 @@ impl RtcConnectionHandler {
                     );
 
                     // Send answer back through transport
-                    let desc = nabto_webrtc_sdk::util::SessionDescription {
+                    let desc = nabto_webrtc::util::SessionDescription {
                         desc_type: "answer".to_string(),
                         sdp: answer.sdp,
                     };
@@ -495,7 +495,7 @@ async fn main() -> Result<()> {
         Box::pin(async move {
             // Generate JWT token with the private key
             generator.generate_token()
-        }) as Pin<Box<dyn Future<Output = Result<String, nabto_webrtc_sdk::Error>> + Send>>
+        }) as Pin<Box<dyn Future<Output = Result<String, nabto_webrtc::Error>> + Send>>
     });
 
     // Clone for later use in URL printing and ICE server provider
@@ -549,7 +549,7 @@ async fn main() -> Result<()> {
             // Generate token
             let token_gen = DeviceTokenGenerator::new(product_id, device_id, private_key);
             let token = token_gen.generate_token()
-                .map_err(|e| nabto_webrtc_sdk::Error::Other(format!("Token generation failed: {}", e)))?;
+                .map_err(|e| nabto_webrtc::Error::Other(format!("Token generation failed: {}", e)))?;
 
             // Request ICE servers
             let http_servers = http_api.request_ice_servers(&token).await?;
@@ -557,7 +557,7 @@ async fn main() -> Result<()> {
             // Convert to signaling protocol format
             let ice_servers = http_servers
                 .into_iter()
-                .map(|s| nabto_webrtc_sdk::util::IceServer {
+                .map(|s| nabto_webrtc::util::IceServer {
                     urls: s.urls,
                     username: s.username,
                     credential: s.credential,
@@ -565,8 +565,8 @@ async fn main() -> Result<()> {
                 .collect();
 
             Ok(ice_servers)
-        }) as Pin<Box<dyn Future<Output = Result<Vec<nabto_webrtc_sdk::util::IceServer>, nabto_webrtc_sdk::Error>> + Send>>
-    }) as Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<Vec<nabto_webrtc_sdk::util::IceServer>, nabto_webrtc_sdk::Error>> + Send>> + Send + Sync>;
+        }) as Pin<Box<dyn Future<Output = Result<Vec<nabto_webrtc::util::IceServer>, nabto_webrtc::Error>> + Send>>
+    }) as Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<Vec<nabto_webrtc::util::IceServer>, nabto_webrtc::Error>> + Send>> + Send + Sync>;
 
     // Wrap device in Arc<Mutex> only for the run loop
     let device = Arc::new(Mutex::new(device));
@@ -578,7 +578,7 @@ async fn main() -> Result<()> {
     tokio::spawn(async move {
         while let Some(event) = event_rx.recv().await {
             match event {
-                nabto_webrtc_sdk::device::DeviceEvent::NewChannel {
+                nabto_webrtc::device::DeviceEvent::NewChannel {
                     handle,
                     message_rx,
                     authorized,
@@ -643,7 +643,7 @@ async fn main() -> Result<()> {
                         }
                     });
                 }
-                nabto_webrtc_sdk::device::DeviceEvent::StateChanged {
+                nabto_webrtc::device::DeviceEvent::StateChanged {
                     old_state,
                     new_state,
                 } => {

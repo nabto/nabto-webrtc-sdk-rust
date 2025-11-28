@@ -187,12 +187,12 @@ impl SignalingDevice {
     ///
     /// The user should spawn this on a tokio task:
     /// ```no_run
-    /// # use nabto_webrtc_sdk::device::{SignalingDevice, SignalingDeviceOptions};
+    /// # use nabto_webrtc::device::{SignalingDevice, SignalingDeviceOptions};
     /// # #[tokio::main]
     /// # async fn main() {
     /// # let token_generator = Box::new(|| {
     /// #     Box::pin(async { Ok("token".to_string()) })
-    /// #         as std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, nabto_webrtc_sdk::Error>> + Send>>
+    /// #         as std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, nabto_webrtc::Error>> + Send>>
     /// # });
     /// # let options = SignalingDeviceOptions {
     /// #     endpoint_url: None,

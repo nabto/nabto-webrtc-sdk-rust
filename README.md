@@ -31,7 +31,7 @@ tokio = { version = "1.0", features = ["full"] }
 ### Basic Example
 
 ```rust
-use nabto_webrtc_sdk::{SignalingDevice, SignalingDeviceOptions};
+use nabto_webrtc::{SignalingDevice, SignalingDeviceOptions};
 use std::future::Future;
 use std::pin::Pin;
 
@@ -42,7 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Box::pin(async {
             // Generate your JWT token here
             Ok("your-jwt-token".to_string())
-        }) as Pin<Box<dyn Future<Output = Result<String, nabto_webrtc_sdk::Error>> + Send>>
+        }) as Pin<Box<dyn Future<Output = Result<String, nabto_webrtc::Error>> + Send>>
     });
 
     // Create signaling device

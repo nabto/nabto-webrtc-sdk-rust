@@ -1,0 +1,13 @@
+[package]
+name = "nabto_webrtc_perfect_negotiation"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+log = "0.4.28"
+nabto_webrtc = { path = "../nabto_webrtc" }
+tokio = "1.48.0"
+webrtc = "0.14"
+
+[dev-dependencies]
+anyhow = "1.0.100"

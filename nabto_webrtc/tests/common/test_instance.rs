@@ -1,7 +1,7 @@
 //! Test instance helper for integration tests
 
 use super::test_client::{DeviceTestOptions, TestClient};
-use nabto_webrtc_sdk::device::{
+use nabto_webrtc::device::{
     ConnectionState, DeviceEvent, SignalingDevice, SignalingDeviceOptions, WebSocketHandle,
 };
 use std::sync::{Arc, Mutex};
@@ -23,7 +23,7 @@ pub struct DeviceTestInstance {
 pub struct DeviceHandle {
     state_rx: Arc<TokioMutex<tokio::sync::watch::Receiver<ConnectionState>>>,
     stop_tx: Arc<TokioMutex<Option<tokio::sync::oneshot::Sender<()>>>>,
-    command_tx: mpsc::Sender<nabto_webrtc_sdk::device::DeviceCommand>,
+    command_tx: mpsc::Sender<nabto_webrtc::device::DeviceCommand>,
     _task: tokio::task::JoinHandle<()>,
 }
 
@@ -43,7 +43,7 @@ impl DeviceHandle {
     /// Trigger check_alive on the device to detect stale connections
     pub async fn check_alive(&self) -> Result<(), Box<dyn std::error::Error>> {
         self.command_tx
-            .send(nabto_webrtc_sdk::device::DeviceCommand::CheckAlive)
+            .send(nabto_webrtc::device::DeviceCommand::CheckAlive)
             .await
             .map_err(|e| format!("Failed to send check_alive command: {}", e).into())
     }
@@ -108,7 +108,7 @@ impl DeviceTestInstance {
     ) -> (
         SignalingDevice,
         mpsc::Receiver<DeviceEvent>,
-        mpsc::Sender<nabto_webrtc_sdk::device::DeviceCommand>,
+        mpsc::Sender<nabto_webrtc::device::DeviceCommand>,
     ) {
         let access_token = self.access_token.clone();
 
@@ -117,7 +117,7 @@ impl DeviceTestInstance {
             Box::pin(async move { Ok(token) })
                 as std::pin::Pin<
                     Box<
-                        dyn std::future::Future<Output = Result<String, nabto_webrtc_sdk::Error>>
+                        dyn std::future::Future<Output = Result<String, nabto_webrtc::Error>>
                             + Send,
                     >,
                 >
@@ -151,7 +151,7 @@ impl DeviceTestInstance {
             tokio::spawn(async move {
                 while let Some(event) = event_rx_from_device.recv().await {
                     // Update state if it's a StateChanged event
-                    if let nabto_webrtc_sdk::device::DeviceEvent::StateChanged {
+                    if let nabto_webrtc::device::DeviceEvent::StateChanged {
                         new_state, ..
                     } = &event
                     {
