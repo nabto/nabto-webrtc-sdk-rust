@@ -2,7 +2,7 @@ use anyhow::Result;
 use nabto_webrtc::client::{SignalingClient, SignalingClientEvent, SignalingClientOptions};
 use nabto_webrtc::common::SignalingConnectionState;
 use nabto_webrtc::util::{ClientMessageTransport, ClientSecurityMode, MessageTransportEvent};
-use nabto_webrtc_perfect_negotiation::PerfectNegotiation;
+use nabto_webrtc_perfect_negotiation::{PerfectNegotiation, PerfectNegotiationTransport};
 use std::sync::Arc;
 use webrtc::api::APIBuilder;
 use webrtc::api::interceptor_registry::{configure_rtcp_reports, configure_twcc_receiver_only};
@@ -88,7 +88,7 @@ async fn main() -> Result<()> {
                             let arc_pc = Arc::new(peer_connection);
                             *perfect_negotiation = Some(PerfectNegotiation::new(
                                 Arc::clone(&arc_pc),
-                                Arc::clone(&transport_clone),
+                                PerfectNegotiationTransport::Client { transport: Arc::clone(&transport_clone) },
                             ));
 
                             arc_pc.on_track(Box::new(
