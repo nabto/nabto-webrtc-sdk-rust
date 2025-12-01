@@ -91,8 +91,6 @@ impl ClientMessageTransport {
     }
 
     async fn handle_channel_message_internal(&self, message: JsonValue) -> Result<()> {
-        //let state = *self.state.lock().unwrap();
-
         let verified = {
             let mut signer = self.signer.lock().unwrap();
             if let Some(ref mut signer) = *signer {

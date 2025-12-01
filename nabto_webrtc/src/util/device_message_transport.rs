@@ -56,6 +56,7 @@ pub struct DeviceMessageTransport {
 
 impl DeviceMessageTransport {
     /// Create a new DeviceMessageTransport
+    /// @TODO: This should probably return Arc<Self> to mirror ClientMessageTransport
     ///
     /// Takes a ChannelHandle for sending messages and a message receiver for receiving messages.
     /// The transport will spawn a background task to process incoming messages.
