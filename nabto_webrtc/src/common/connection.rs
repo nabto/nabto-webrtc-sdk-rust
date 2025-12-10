@@ -9,6 +9,7 @@
 
 use crate::common::routing::RoutingMessage;
 use futures::{SinkExt, StreamExt};
+use log::{debug, error, trace, warn};
 use serde_json::Value as JsonValue;
 use std::time::Duration;
 use tokio::net::TcpStream;
@@ -173,7 +174,7 @@ impl WebSocketConnection {
                 // Check for PONG timeout if PING was sent
                 _ = timeout_interval.tick() => {
                     if self.check_ping_timeout() {
-                        eprintln!("PING timeout - no PONG received within {} seconds", self.config.pong_timeout_ms as f64 / 1000.0);
+                        warn!("PING timeout - no PONG received within {} seconds", self.config.pong_timeout_ms as f64 / 1000.0);
                         let _ = self.event_tx.send(ConnectionEvent::PingTimeout).await;
                         break;
                     }
@@ -184,11 +185,11 @@ impl WebSocketConnection {
                     match result {
                         Some(Ok(msg)) => {
                             if let Err(e) = self.handle_ws_message(msg).await {
-                                eprintln!("Error handling WebSocket message: {}", e);
+                                error!("Error handling WebSocket message: {}", e);
                             }
                         }
                         Some(Err(e)) => {
-                            eprintln!("WebSocket error: {}", e);
+                            error!("WebSocket error: {}", e);
                             let _ = self.event_tx.send(ConnectionEvent::ConnectionError(e.to_string())).await;
                             break;
                         }
@@ -205,7 +206,7 @@ impl WebSocketConnection {
                     match cmd {
                         Some(ConnectionCommand::SendMessage(msg)) => {
                             if let Err(e) = self.send_routing_message(&msg).await {
-                                eprintln!("Failed to send message: {}", e);
+                                error!("Failed to send message: {}", e);
                                 let _ = self.event_tx.send(ConnectionEvent::ConnectionError(e)).await;
                             }
                         }
@@ -214,7 +215,7 @@ impl WebSocketConnection {
                             self.ping_sent_at = Some(Instant::now());
 
                             if let Err(e) = self.send_routing_message(&RoutingMessage::Ping).await {
-                                eprintln!("Failed to send PING: {}", e);
+                                error!("Failed to send PING: {}", e);
                                 let _ = self.event_tx.send(ConnectionEvent::ConnectionError(e)).await;
                                 break;
                             }
@@ -261,7 +262,7 @@ impl WebSocketConnection {
             }
             WsMessage::Close(frame) => {
                 if let Some(CloseFrame { code, reason }) = frame {
-                    eprintln!("WebSocket closed with code {} reason: {}", code, reason);
+                    debug!("WebSocket closed with code {} reason: {}", code, reason);
                 }
             }
             WsMessage::Frame(_) => {
@@ -274,7 +275,7 @@ impl WebSocketConnection {
     /// Handle incoming routing message
     async fn handle_routing_message(&mut self, text: &str) -> Result<(), String> {
         // Log the WebSocket message being received
-        eprintln!("[WebSocket] Received message: {}", text);
+        trace!("[WebSocket] Received message: {}", text);
 
         let routing_msg: RoutingMessage = serde_json::from_str(text)
             .map_err(|e| format!("Failed to parse routing message: {}", e))?;
@@ -335,7 +336,7 @@ impl WebSocketConnection {
             .map_err(|e| format!("Failed to serialize message: {}", e))?;
 
         // Log the WebSocket message being sent
-        eprintln!("[WebSocket] Sending message: {}", json);
+        trace!("[WebSocket] Sending message: {}", json);
 
         self.ws_stream
             .send(WsMessage::Text(json))

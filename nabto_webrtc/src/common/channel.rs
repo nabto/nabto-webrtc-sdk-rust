@@ -4,6 +4,7 @@ use super::reliability::{Reliability, ReliabilityMessage};
 use crate::common::routing::{error_codes, ErrorInfo};
 use crate::common::SignalingChannelState;
 use crate::{Error, Result};
+use log::{debug, error, trace};
 use serde_json::Value as JsonValue;
 use std::collections::VecDeque;
 use tokio::sync::mpsc;
@@ -248,7 +249,7 @@ impl SignalingChannel {
         if self.state == SignalingChannelState::Closed
             || self.state == SignalingChannelState::Failed
         {
-            eprintln!(
+            debug!(
                 "[CHANNEL {}] Skipping retransmit - channel state: {:?}",
                 self.channel_id, self.state
             );
@@ -256,14 +257,14 @@ impl SignalingChannel {
         }
 
         let messages = self.reliability.handle_connect();
-        eprintln!(
+        debug!(
             "[CHANNEL {}] Retransmitting {} unacked messages",
             self.channel_id,
             messages.len()
         );
 
         for msg in messages {
-            eprintln!(
+            trace!(
                 "[CHANNEL {}] Retransmitting message: {:?}",
                 self.channel_id, msg
             );
@@ -309,7 +310,7 @@ impl SignalingChannel {
             return;
         }
         // TODO: Emit error event
-        eprintln!("Channel {} error: {:?}", self.channel_id, error);
+        error!("Channel {} error: {:?}", self.channel_id, error);
         self.set_state(SignalingChannelState::Failed);
     }
 

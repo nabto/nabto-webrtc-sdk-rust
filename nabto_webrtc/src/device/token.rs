@@ -157,10 +157,7 @@ kroaroSWQLA/A+6sCQRb8g+Ip4yhRANCAATc3dMAfNPk6dmWOLoYdOLwsuC6OQ4x
         );
 
         let result = generator.generate_token();
-        if let Err(ref e) = result {
-            eprintln!("Token generation error: {:?}", e);
-        }
-        assert!(result.is_ok(), "Token generation should succeed");
+        assert!(result.is_ok(), "Token generation should succeed: {:?}", result.err());
 
         let token = result.unwrap();
         assert!(!token.is_empty(), "Token should not be empty");
@@ -179,10 +176,7 @@ kroaroSWQLA/A+6sCQRb8g+Ip4yhRANCAATc3dMAfNPk6dmWOLoYdOLwsuC6OQ4x
         );
 
         let key_id = generator.get_key_id();
-        if let Err(ref e) = key_id {
-            eprintln!("Key ID generation error: {:?}", e);
-        }
-        assert!(key_id.is_ok(), "Key ID generation should succeed");
+        assert!(key_id.is_ok(), "Key ID generation should succeed: {:?}", key_id.err());
 
         let kid = key_id.unwrap();
         assert_eq!(

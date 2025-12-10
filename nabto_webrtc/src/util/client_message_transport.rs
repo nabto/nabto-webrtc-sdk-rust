@@ -4,6 +4,7 @@ use super::signing::{JwtMessageSigner, MessageSigner, NoneMessageSigner};
 use crate::client::SignalingClient;
 use crate::common::channel::ChannelHandle;
 use crate::{Error, Result};
+use log::warn;
 use serde_json::Value as JsonValue;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
@@ -52,7 +53,7 @@ impl ClientMessageTransport {
         tokio::spawn(async move {
             while let Some(message) = message_rx.recv().await {
                 if let Err(e) = this.handle_channel_message_internal(message).await {
-                    eprintln!("Error handling channel message: {:?}", e);
+                    warn!("Error handling channel message: {:?}", e);
                     let _ = this
                         .event_tx
                         .send(MessageTransportEvent::Error(e.to_string()));

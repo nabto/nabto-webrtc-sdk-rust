@@ -1,3 +1,4 @@
+use log::error;
 use nabto_webrtc::util::ClientMessageTransport;
 use nabto_webrtc::util::DeviceMessageTransport;
 use nabto_webrtc::Result as NabtoResult;
@@ -108,7 +109,7 @@ impl PerfectNegotiation {
         .await;
 
         if let Err(err) = result {
-            eprintln!("Error in on_negotiation_needed: {:?}", err);
+            error!("Error in on_negotiation_needed: {:?}", err);
         }
 
         *self.making_offer.lock().await = false;
@@ -224,7 +225,7 @@ impl PerfectNegotiation {
         .await;
 
         if let Err(err) = result {
-            eprintln!("Error in handle_description: {:?}", err);
+            error!("Error in handle_description: {:?}", err);
         }
     }
 
@@ -242,7 +243,7 @@ impl PerfectNegotiation {
 
         if let Err(err) = result {
             if !ignore_offer {
-                eprintln!("Error adding ICE candidate: {:?}", err);
+                error!("Error adding ICE candidate: {:?}", err);
             }
         }
     }

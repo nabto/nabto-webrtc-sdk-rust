@@ -11,6 +11,7 @@ use crate::common::websocket::WebSocketHandle;
 use crate::common::SignalingChannelState;
 use crate::common::SignalingConnectionState;
 use crate::Error;
+use log::{debug, error, info, warn};
 use serde_json::Value as JsonValue;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -135,7 +136,7 @@ impl SignalingClient {
                     if self.service.connection_state == SignalingConnectionState::WaitRetry {
                         // @TODO: Handle WaitRetry case
                         let wait_seconds = self.calculate_reconnect_delay();
-                        eprintln!("Waiting {} seconds before reconnecting.", wait_seconds);
+                        info!("Waiting {} seconds before reconnecting.", wait_seconds);
 
                         tokio::select! {
                             _ = tokio::time::sleep(Duration::from_secs(wait_seconds as u64)) => {}
@@ -162,11 +163,11 @@ impl SignalingClient {
                             self.set_connection_state(SignalingConnectionState::Connected);
                             self.connected_at = Some(Instant::now());
                             self.reconnect_counter = 0;
-                            println!("Successfully connected to signaling service");
+                            info!("Successfully connected to signaling service");
                         }
 
                         Err(e) => {
-                            eprintln!("Connection failed: {:?}", e);
+                            warn!("Connection failed: {:?}", e);
                             self.set_connection_state(SignalingConnectionState::WaitRetry);
                             self.reconnect_counter += 1;
                         }
@@ -183,7 +184,7 @@ impl SignalingClient {
                                     }
 
                                     None => {
-                                        eprintln!("Websocket event channel was closed");
+                                        warn!("Websocket event channel was closed");
                                         self.transition_to_reconnect();
                                     }
                                 }
@@ -196,7 +197,7 @@ impl SignalingClient {
                             }
                         }
                     } else {
-                        eprintln!("SignalingClient is in CONNECTED state but there is no websocket handle");
+                        error!("SignalingClient is in CONNECTED state but there is no websocket handle");
                         break;
                     }
                 }
@@ -230,7 +231,7 @@ impl SignalingClient {
                     .send_message_async(message, &self.service)
                     .await
                 {
-                    eprintln!("Failed to send message on channel {}: {:?}", channel_id, e);
+                    error!("Failed to send message on channel {}: {:?}", channel_id, e);
                 }
             }
 
@@ -265,13 +266,13 @@ impl SignalingClient {
     async fn handle_websocket_event(&mut self, event: ConnectionEvent) {
         match event {
             ConnectionEvent::Open => {
-                println!("Websocket connection opened");
+                debug!("Websocket connection opened");
             }
 
             ConnectionEvent::Closed
             | ConnectionEvent::ConnectionError(_)
             | ConnectionEvent::PingTimeout => {
-                eprintln!("Websocket disconnected: {:?}", event);
+                warn!("Websocket disconnected: {:?}", event);
                 self.transition_to_reconnect();
             }
 
@@ -307,7 +308,7 @@ impl SignalingClient {
             .handle_routing_message(message, &self.service)
             .await
         {
-            eprintln!("SignalingClient::handle_message error: {}", e);
+            error!("SignalingClient::handle_message error: {}", e);
         }
     }
 
@@ -369,7 +370,7 @@ impl SignalingService for SignalingClientService {
             };
 
             if let Err(e) = handle.send_message(routing_msg).await {
-                eprintln!("Failed to send routing message: {}", e);
+                error!("Failed to send routing message: {}", e);
             }
         }
     }
@@ -386,7 +387,7 @@ impl SignalingService for SignalingClientService {
             };
 
             if let Err(e) = handle.send_message(routing_msg).await {
-                eprintln!("Failed to send error message: {}", e);
+                error!("Failed to send error message: {}", e);
             }
         }
     }

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use log::{debug, error, info};
 use nabto_webrtc::client::{SignalingClient, SignalingClientEvent, SignalingClientOptions};
 use nabto_webrtc::common::SignalingConnectionState;
 use nabto_webrtc::util::{ClientMessageTransport, ClientSecurityMode, MessageTransportEvent};
@@ -53,7 +54,7 @@ async fn main() -> Result<()> {
 
     let client_task = tokio::spawn(async move {
         if let Err(e) = client.run().await {
-            eprintln!("Error: {:?}", e);
+            error!("Error: {:?}", e);
         }
     });
 
@@ -65,7 +66,7 @@ async fn main() -> Result<()> {
             let event = transport_rx.recv().await.unwrap();
             match event {
                 MessageTransportEvent::SetupDone(ice_servers) => {
-                    println!("Ice servers: {:?}", ice_servers);
+                    debug!("Ice servers: {:?}", ice_servers);
                     let mut rtc_ice_servers = vec![];
                     if let Some(servers) = ice_servers {
                         for server in servers {
@@ -94,7 +95,7 @@ async fn main() -> Result<()> {
                             arc_pc.on_track(Box::new(
                                 move |track, rtp_receiver, rtp_transceiver| {
                                     Box::pin(async move {
-                                        println!(
+                                        info!(
                                             "*** RECEIVED NEW TRACK: {} {}",
                                             track.kind(),
                                             track.id()
@@ -126,15 +127,15 @@ async fn main() -> Result<()> {
             let event = event_rx.recv().await.unwrap();
             match event {
                 SignalingClientEvent::Message(value) => {
-                    println!("SignalingClientEvent::Message");
+                    debug!("SignalingClientEvent::Message");
                 }
 
                 SignalingClientEvent::ConnectionReconnect => {
-                    println!("SignalingClientEvent::ConnectionReconnect");
+                    debug!("SignalingClientEvent::ConnectionReconnect");
                 }
 
                 SignalingClientEvent::ConnectionStateChange(signaling_connection_state) => {
-                    println!(
+                    debug!(
                         "SignalingClientEvent::ConnectionStateChange: {:?}",
                         signaling_connection_state
                     );
@@ -146,14 +147,14 @@ async fn main() -> Result<()> {
                 }
 
                 SignalingClientEvent::ChannelStateChange(signaling_channel_state) => {
-                    println!(
+                    debug!(
                         "SignalingClientEvent::ChannelStateChange {:?}",
                         signaling_channel_state
                     );
                 }
 
                 SignalingClientEvent::Error => {
-                    println!("SignalingClientEvent::Error");
+                    error!("SignalingClientEvent::Error");
                 }
             }
         }
