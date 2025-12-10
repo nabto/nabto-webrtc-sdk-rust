@@ -89,7 +89,9 @@ async fn main() -> Result<()> {
                             let arc_pc = Arc::new(peer_connection);
                             *perfect_negotiation = Some(PerfectNegotiation::new(
                                 Arc::clone(&arc_pc),
-                                PerfectNegotiationTransport::Client { transport: Arc::clone(&transport_clone) },
+                                PerfectNegotiationTransport::Client {
+                                    transport: Arc::clone(&transport_clone),
+                                },
                             ));
 
                             arc_pc.on_track(Box::new(

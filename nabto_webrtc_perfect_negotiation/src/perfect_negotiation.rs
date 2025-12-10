@@ -1,7 +1,7 @@
 use log::error;
+use nabto_webrtc::Result as NabtoResult;
 use nabto_webrtc::util::ClientMessageTransport;
 use nabto_webrtc::util::DeviceMessageTransport;
-use nabto_webrtc::Result as NabtoResult;
 use nabto_webrtc::util::{IceCandidate, SessionDescription, WebrtcSignalingMessage};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -13,8 +13,12 @@ use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::peer_connection::signaling_state::RTCSignalingState;
 
 pub enum PerfectNegotiationTransport {
-    Client { transport: Arc<ClientMessageTransport> },
-    Device { transport: DeviceMessageTransport }
+    Client {
+        transport: Arc<ClientMessageTransport>,
+    },
+    Device {
+        transport: DeviceMessageTransport,
+    },
 }
 
 pub struct PerfectNegotiation {
@@ -34,7 +38,7 @@ impl PerfectNegotiation {
     ) -> Arc<Self> {
         let polite = match message_transport {
             PerfectNegotiationTransport::Client { transport: _ } => false,
-            PerfectNegotiationTransport::Device { transport: _ } => true
+            PerfectNegotiationTransport::Device { transport: _ } => true,
         };
 
         let negotiation = Arc::new(Self {
@@ -250,8 +254,12 @@ impl PerfectNegotiation {
 
     async fn send_webrtc_signaling_message(&self, msg: &WebrtcSignalingMessage) -> NabtoResult<()> {
         match &self.message_transport {
-            PerfectNegotiationTransport::Client { transport } => { transport.send_webrtc_signaling_message(msg).await }
-            PerfectNegotiationTransport::Device { transport } => { transport.send_webrtc_signaling_message(msg).await }
+            PerfectNegotiationTransport::Client { transport } => {
+                transport.send_webrtc_signaling_message(msg).await
+            }
+            PerfectNegotiationTransport::Device { transport } => {
+                transport.send_webrtc_signaling_message(msg).await
+            }
         }
     }
 }

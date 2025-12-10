@@ -266,7 +266,8 @@ impl SignalingChannel {
         for msg in messages {
             trace!(
                 "[CHANNEL {}] Retransmitting message: {:?}",
-                self.channel_id, msg
+                self.channel_id,
+                msg
             );
             if let Ok(json) = serde_json::to_value(&msg) {
                 service.send_routing_message(&self.channel_id, json).await;

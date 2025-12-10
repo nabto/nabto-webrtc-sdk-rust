@@ -555,7 +555,8 @@ impl SignalingDevice {
     async fn handle_message(&mut self, channel_id: String, message: JsonValue, authorized: bool) {
         trace!(
             "handle_message called for channel_id={}, authorized={}",
-            channel_id, authorized
+            channel_id,
+            authorized
         );
         // Check if we have an existing channel
         if self.channels.contains_key(&channel_id) {

@@ -105,7 +105,8 @@ impl Reliability {
             } else {
                 trace!(
                     "[RELIABILITY] ACK seq {} doesn't match first unacked seq {}",
-                    seq, first_seq
+                    seq,
+                    first_seq
                 );
             }
         } else {

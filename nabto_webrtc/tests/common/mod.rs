@@ -18,9 +18,6 @@ static INIT: Once = Once::new();
 /// Safe to call multiple times - only initializes once.
 pub fn init_logger() {
     INIT.call_once(|| {
-        env_logger::builder()
-            .is_test(true)
-            .try_init()
-            .ok();
+        env_logger::builder().is_test(true).try_init().ok();
     });
 }
