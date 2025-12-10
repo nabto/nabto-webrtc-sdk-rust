@@ -11,7 +11,7 @@
 
 mod common;
 
-use common::{DeviceTestInstance, DeviceTestOptions};
+use common::{init_logger, DeviceTestInstance, DeviceTestOptions};
 use nabto_webrtc::common::SignalingConnectionState;
 use std::time::Duration;
 
@@ -20,6 +20,7 @@ use std::time::Duration;
 #[tokio::test]
 #[ignore] // Requires integration test server to be running
 async fn test_device_connect_ok() {
+    init_logger();
     let test = DeviceTestInstance::create(DeviceTestOptions::default())
         .await
         .expect("Failed to create test instance");

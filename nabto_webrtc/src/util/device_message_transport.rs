@@ -13,6 +13,7 @@ use super::signing::{JwtMessageSigner, MessageSigner, NoneMessageSigner};
 use crate::common::channel::ChannelHandle;
 use crate::common::routing::ErrorInfo;
 use crate::{Error, Result};
+use log::warn;
 use serde_json::Value as JsonValue;
 use std::future::Future;
 use std::pin::Pin;
@@ -85,7 +86,7 @@ impl DeviceMessageTransport {
                     .handle_channel_message_internal(message)
                     .await
                 {
-                    eprintln!("Error handling channel message: {:?}", e);
+                    warn!("Error handling channel message: {:?}", e);
                     let _ = transport_clone
                         .event_tx
                         .send(MessageTransportEvent::Error(e.to_string()));
@@ -148,7 +149,7 @@ impl DeviceMessageTransport {
             match provider().await {
                 Ok(servers) => Some(servers),
                 Err(e) => {
-                    eprintln!("Failed to request ICE servers: {:?}", e);
+                    warn!("Failed to request ICE servers: {:?}", e);
                     None
                 }
             }

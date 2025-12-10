@@ -15,6 +15,7 @@ use crate::common::{ConnectionEvent, WebSocketConfig, WebSocketConnection, WebSo
 use crate::common::{HttpApi, IceServer};
 use crate::common::{SignalingChannelState, SignalingConnectionState};
 use crate::{Error, Result};
+use log::{debug, error, info, trace, warn};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::future::Future;
@@ -222,7 +223,7 @@ impl SignalingDevice {
                     // Calculate retry delay if we're in WaitRetry
                     if self.state == SignalingConnectionState::WaitRetry {
                         let wait_seconds = self.calculate_reconnect_delay();
-                        eprintln!("Waiting {} seconds before reconnecting...", wait_seconds);
+                        info!("Waiting {} seconds before reconnecting...", wait_seconds);
 
                         tokio::select! {
                             _ = tokio::time::sleep(Duration::from_secs(wait_seconds as u64)) => {},
@@ -249,13 +250,13 @@ impl SignalingDevice {
                             self.set_state(SignalingConnectionState::Connected);
                             self.connected_at = Some(Instant::now());
                             self.reconnect_counter = 0;
-                            eprintln!("Successfully connected to signaling service");
+                            info!("Successfully connected to signaling service");
 
                             // Retransmit unacked messages for all existing channels after reconnection
                             self.retransmit_unacked_messages().await;
                         }
                         Err(e) => {
-                            eprintln!("Connection failed: {:?}", e);
+                            warn!("Connection failed: {:?}", e);
                             self.set_state(SignalingConnectionState::WaitRetry);
                             self.reconnect_counter += 1;
                         }
@@ -274,7 +275,7 @@ impl SignalingDevice {
                                             }
                                             None => {
                                                 // WebSocket event channel closed
-                                                eprintln!("WebSocket event channel closed");
+                                                warn!("WebSocket event channel closed");
                                                 self.transition_to_reconnect();
                                             }
                                         }
@@ -306,7 +307,7 @@ impl SignalingDevice {
                         }
                     } else {
                         // No event receiver, shouldn't happen
-                        eprintln!("No WebSocket event receiver in Connected state");
+                        error!("No WebSocket event receiver in Connected state");
                         break;
                     }
                 }
@@ -372,32 +373,32 @@ impl SignalingDevice {
     async fn retransmit_unacked_messages(&mut self) {
         let channel_ids: Vec<String> = self.channels.keys().cloned().collect();
 
-        eprintln!(
+        debug!(
             "[RETRANSMIT] Retransmitting unacked messages for {} channels",
             channel_ids.len()
         );
 
         for channel_id in channel_ids {
-            eprintln!("[RETRANSMIT] Processing channel: {}", channel_id);
+            debug!("[RETRANSMIT] Processing channel: {}", channel_id);
             if let Some(mut channel) = self.channels.remove(&channel_id) {
                 channel.handle_websocket_reconnect(self).await;
                 self.channels.insert(channel_id, channel);
             }
         }
 
-        eprintln!("[RETRANSMIT] Retransmission complete");
+        debug!("[RETRANSMIT] Retransmission complete");
     }
 
     /// Handle a single connection event
     async fn handle_connection_event(&mut self, event: ConnectionEvent) {
         match event {
             ConnectionEvent::Open => {
-                eprintln!("WebSocket connection opened");
+                debug!("WebSocket connection opened");
             }
             ConnectionEvent::Closed
             | ConnectionEvent::ConnectionError(_)
             | ConnectionEvent::PingTimeout => {
-                eprintln!("WebSocket disconnected: {:?}", event);
+                warn!("WebSocket disconnected: {:?}", event);
                 self.transition_to_reconnect();
             }
             ConnectionEvent::Message {
@@ -405,7 +406,7 @@ impl SignalingDevice {
                 message,
                 authorized,
             } => {
-                eprintln!("Received MESSAGE event for channel {}", channel_id);
+                trace!("Received MESSAGE event for channel {}", channel_id);
                 self.handle_message(channel_id, message, authorized).await;
             }
             ConnectionEvent::Error {
@@ -431,11 +432,11 @@ impl SignalingDevice {
                 channel_id,
                 message,
             } => {
-                eprintln!(
+                trace!(
                     "[DEVICE] Handling SendMessage request for channel {}",
                     channel_id
                 );
-                eprintln!(
+                trace!(
                     "[DEVICE] Message preview: {:?}",
                     serde_json::to_string(&message)
                         .unwrap_or_else(|_| "failed to serialize".to_string())
@@ -448,12 +449,12 @@ impl SignalingDevice {
                 // We need to remove the channel temporarily to avoid borrowing issues
                 if let Some(mut channel) = self.channels.remove(&channel_id) {
                     if let Err(e) = channel.send_message_async(message, self).await {
-                        eprintln!("Failed to send message on channel {}: {:?}", channel_id, e);
+                        error!("Failed to send message on channel {}: {:?}", channel_id, e);
                     }
                     // Put the channel back
                     self.channels.insert(channel_id, channel);
                 } else {
-                    eprintln!("Channel {} not found for sending message", channel_id);
+                    warn!("Channel {} not found for sending message", channel_id);
                 }
             }
             ChannelRequest::SendError { channel_id, error } => {
@@ -461,7 +462,7 @@ impl SignalingDevice {
             }
             ChannelRequest::Close { channel_id } => {
                 self.channels.remove(&channel_id);
-                eprintln!("Closed channel {}", channel_id);
+                debug!("Closed channel {}", channel_id);
             }
         }
     }
@@ -471,7 +472,7 @@ impl SignalingDevice {
         match command {
             DeviceCommand::CheckAlive => {
                 if let Err(e) = self.check_alive().await {
-                    eprintln!("check_alive failed: {:?}", e);
+                    warn!("check_alive failed: {:?}", e);
                 }
             }
         }
@@ -552,30 +553,31 @@ impl SignalingDevice {
 
     /// Handle incoming message on a channel
     async fn handle_message(&mut self, channel_id: String, message: JsonValue, authorized: bool) {
-        eprintln!(
+        trace!(
             "handle_message called for channel_id={}, authorized={}",
-            channel_id, authorized
+            channel_id,
+            authorized
         );
         // Check if we have an existing channel
         if self.channels.contains_key(&channel_id) {
-            eprintln!("Channel already exists");
+            trace!("Channel already exists");
 
             // Remove channel temporarily to avoid borrow issues
             let mut channel = self.channels.remove(&channel_id).unwrap();
 
             // Dispatch to existing channel
             if let Err(e) = channel.handle_routing_message(message, self).await {
-                eprintln!("Error handling message on channel {}: {:?}", channel_id, e);
+                error!("Error handling message on channel {}: {:?}", channel_id, e);
             }
 
             // Put the channel back
             self.channels.insert(channel_id, channel);
         } else {
-            eprintln!("No existing channel, checking if initial message...");
+            trace!("No existing channel, checking if initial message...");
             // No existing channel - check if this is an initial message (seq 0)
             match SignalingChannel::is_initial_message(&message) {
                 Ok(true) => {
-                    eprintln!("Initial message detected, creating new channel");
+                    debug!("Initial message detected, creating new channel");
                     // Create new channel with message channel set up
                     let channel_for_map = SignalingChannel::new(channel_id.clone());
                     let (mut channel_with_rx, message_rx) = channel_for_map.with_message_channel();
@@ -586,7 +588,7 @@ impl SignalingDevice {
 
                     // Handle the initial message
                     if let Err(e) = channel_with_rx.handle_routing_message(message, self).await {
-                        eprintln!(
+                        error!(
                             "Error handling initial message on channel {}: {:?}",
                             channel_id, e
                         );
@@ -609,12 +611,12 @@ impl SignalingDevice {
                     };
 
                     if let Err(e) = self.device_event_tx.try_send(event) {
-                        eprintln!("Failed to emit NewChannel event: {:?}", e);
+                        error!("Failed to emit NewChannel event: {:?}", e);
                     }
                 }
                 Ok(false) => {
                     // Not an initial message and no channel exists - send error
-                    eprintln!(
+                    warn!(
                         "Received non-initial message for unknown channel: {}",
                         channel_id
                     );
@@ -625,7 +627,7 @@ impl SignalingDevice {
                     self.send_error(&channel_id, error).await;
                 }
                 Err(e) => {
-                    eprintln!(
+                    error!(
                         "Failed to parse message for channel {}: {:?}",
                         channel_id, e
                     );
@@ -691,7 +693,7 @@ impl SignalingService for SignalingDevice {
             // This prevents the race condition where tokio::spawn would allow
             // messages to be reordered
             if let Err(e) = handle.send_message(routing_msg).await {
-                eprintln!("Failed to send routing message: {}", e);
+                error!("Failed to send routing message: {}", e);
             }
         }
     }
@@ -708,7 +710,7 @@ impl SignalingService for SignalingDevice {
             };
 
             if let Err(e) = handle.send_message(routing_msg).await {
-                eprintln!("Failed to send error message: {}", e);
+                error!("Failed to send error message: {}", e);
             }
         }
     }

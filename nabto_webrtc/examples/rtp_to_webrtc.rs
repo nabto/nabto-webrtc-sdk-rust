@@ -19,6 +19,7 @@
 
 use anyhow::Result;
 use clap::Parser;
+use log::{debug, error, info, warn};
 use nabto_webrtc::common::channel::ChannelHandle;
 use nabto_webrtc::common::HttpApi;
 use nabto_webrtc::device::{DeviceTokenGenerator, SignalingDevice, SignalingDeviceOptions};
@@ -69,7 +70,7 @@ impl RtcConnectionHandler {
         video_track: Arc<TrackLocalStaticRTP>,
     ) -> Self {
         let channel_id = handle.channel_id().to_string();
-        println!("[{}] Creating RTC connection handler", channel_id);
+        debug!("[{}] Creating RTC connection handler", channel_id);
 
         let transport = DeviceMessageTransport::new(handle.clone(), message_rx, options);
 
@@ -105,7 +106,7 @@ impl RtcConnectionHandler {
                     .any(|url| url.starts_with("turn:") || url.starts_with("turns:"));
 
                 if is_turn && (server.username.is_none() || server.credential.is_none()) {
-                    eprintln!(
+                    warn!(
                         "[{}] Skipping TURN server with missing credentials: {:?}",
                         channel_id, server
                     );
@@ -118,7 +119,7 @@ impl RtcConnectionHandler {
                     credential: server.credential.clone().unwrap_or_default(),
                 };
 
-                println!(
+                debug!(
                     "[{}] Adding ICE server - urls: {:?}, username: '{}', credential: '{}'",
                     channel_id, rtc_server.urls, rtc_server.username, rtc_server.credential
                 );
@@ -132,29 +133,29 @@ impl RtcConnectionHandler {
             ..Default::default()
         };
 
-        println!(
+        debug!(
             "[{}] Creating peer connection with {} ICE servers",
             channel_id,
             rtc_ice_servers.len()
         );
         let peer_connection = match self.api.new_peer_connection(config).await {
             Ok(pc) => {
-                println!("[{}] Successfully created peer connection", channel_id);
+                debug!("[{}] Successfully created peer connection", channel_id);
                 Arc::new(pc)
             }
             Err(e) => {
-                eprintln!("[{}] Failed to create peer connection: {}", channel_id, e);
-                eprintln!("[{}] ICE servers were: {:?}", channel_id, rtc_ice_servers);
+                error!("[{}] Failed to create peer connection: {}", channel_id, e);
+                error!("[{}] ICE servers were: {:?}", channel_id, rtc_ice_servers);
                 return Err(e.into());
             }
         };
-        println!("[{}] Created peer connection", channel_id);
+        debug!("[{}] Created peer connection", channel_id);
 
         // Set up peer connection state change handler
         let channel_id_for_state = channel_id.to_string();
         peer_connection.on_peer_connection_state_change(Box::new(
             move |state: RTCPeerConnectionState| {
-                println!(
+                info!(
                     "[{}] Peer connection state changed: {}",
                     channel_id_for_state, state
                 );
@@ -175,7 +176,7 @@ impl RtcConnectionHandler {
                     // Convert RTCIceCandidate to JSON to get the candidate string
                     match candidate.to_json() {
                         Ok(candidate_init) => {
-                            println!(
+                            debug!(
                                 "[{}] Discovered local ICE candidate: {}",
                                 channel_id, candidate_init.candidate
                             );
@@ -193,20 +194,20 @@ impl RtcConnectionHandler {
                             };
 
                             if let Err(e) = transport.send_webrtc_signaling_message(&msg).await {
-                                eprintln!("[{}] Failed to send ICE candidate: {}", channel_id, e);
+                                error!("[{}] Failed to send ICE candidate: {}", channel_id, e);
                             } else {
-                                println!("[{}] Sent ICE candidate to remote peer", channel_id);
+                                debug!("[{}] Sent ICE candidate to remote peer", channel_id);
                             }
                         }
                         Err(e) => {
-                            eprintln!(
+                            error!(
                                 "[{}] Failed to convert ICE candidate to JSON: {}",
                                 channel_id, e
                             );
                         }
                     }
                 } else {
-                    println!("[{}] ICE gathering complete", channel_id);
+                    debug!("[{}] ICE gathering complete", channel_id);
                 }
             })
         }));
@@ -224,14 +225,14 @@ impl RtcConnectionHandler {
             let channel_id = channel_id_for_negotiation.clone();
 
             Box::pin(async move {
-                println!("[{}] Negotiation needed - creating offer", channel_id);
+                debug!("[{}] Negotiation needed - creating offer", channel_id);
 
                 *making_offer.lock().await = true;
 
                 // Create and set local description (offer)
                 if let Ok(offer) = pc.create_offer(None).await {
                     if let Err(e) = pc.set_local_description(offer.clone()).await {
-                        eprintln!("[{}] Failed to set local description: {}", channel_id, e);
+                        error!("[{}] Failed to set local description: {}", channel_id, e);
                         *making_offer.lock().await = false;
                         return;
                     }
@@ -245,12 +246,12 @@ impl RtcConnectionHandler {
                     let msg = WebrtcSignalingMessage::Description { description: desc };
 
                     if let Err(e) = transport.send_webrtc_signaling_message(&msg).await {
-                        eprintln!("[{}] Failed to send offer: {}", channel_id, e);
+                        error!("[{}] Failed to send offer: {}", channel_id, e);
                     } else {
-                        println!("[{}] Sent offer to client", channel_id);
+                        debug!("[{}] Sent offer to client", channel_id);
                     }
                 } else {
-                    eprintln!("[{}] Failed to create offer", channel_id);
+                    error!("[{}] Failed to create offer", channel_id);
                 }
 
                 *making_offer.lock().await = false;
@@ -263,7 +264,7 @@ impl RtcConnectionHandler {
         let _rtp_sender = peer_connection
             .add_track(Arc::clone(&self.video_track) as Arc<dyn TrackLocal + Send + Sync>)
             .await?;
-        println!("[{}] Added video track to peer connection", channel_id);
+        debug!("[{}] Added video track to peer connection", channel_id);
 
         self.peer_connection = Some(peer_connection);
         Ok(())
@@ -278,33 +279,33 @@ impl RtcConnectionHandler {
             .take_event_receiver()
             .ok_or_else(|| anyhow::anyhow!("Failed to get event receiver"))?;
 
-        println!("[{}] Connection handler running", channel_id);
+        debug!("[{}] Connection handler running", channel_id);
 
         // Handle transport events
         while let Some(event) = event_rx.recv().await {
             match event {
                 MessageTransportEvent::SetupDone(ice_servers) => {
-                    println!(
+                    debug!(
                         "[{}] Setup completed, ICE servers: {:?}",
                         channel_id, ice_servers
                     );
 
                     // Create peer connection now that we have ICE servers
                     self.create_peer_connection(ice_servers).await?;
-                    println!("[{}] Peer connection ready", channel_id);
+                    debug!("[{}] Peer connection ready", channel_id);
                 }
                 MessageTransportEvent::WebrtcSignalingMessage(msg) => {
-                    println!("[{}] Received WebRTC signaling message", channel_id);
+                    debug!("[{}] Received WebRTC signaling message", channel_id);
                     self.handle_webrtc_message(msg).await?;
                 }
                 MessageTransportEvent::Error(err) => {
-                    eprintln!("[{}] Transport error: {}", channel_id, err);
+                    error!("[{}] Transport error: {}", channel_id, err);
                     return Err(anyhow::anyhow!("Transport error: {}", err));
                 }
             }
         }
 
-        println!("[{}] Connection handler stopped", channel_id);
+        debug!("[{}] Connection handler stopped", channel_id);
         Ok(())
     }
 
@@ -321,7 +322,7 @@ impl RtcConnectionHandler {
 
         match msg {
             WebrtcSignalingMessage::Description { description } => {
-                println!(
+                debug!(
                     "[{}] Received SDP description: {}",
                     channel_id, description.desc_type
                 );
@@ -334,7 +335,7 @@ impl RtcConnectionHandler {
                 *ignore_offer_guard = is_offer && making_offer;
 
                 if *ignore_offer_guard {
-                    println!(
+                    debug!(
                         "[{}] Ignoring offer due to collision (polite peer)",
                         channel_id
                     );
@@ -349,7 +350,7 @@ impl RtcConnectionHandler {
                 };
 
                 peer_connection.set_remote_description(remote_desc).await?;
-                println!(
+                debug!(
                     "[{}] Set remote description ({})",
                     channel_id, description.desc_type
                 );
@@ -360,7 +361,7 @@ impl RtcConnectionHandler {
                     peer_connection
                         .set_local_description(answer.clone())
                         .await?;
-                    println!(
+                    debug!(
                         "[{}] Created and set local description (answer)",
                         channel_id
                     );
@@ -376,11 +377,11 @@ impl RtcConnectionHandler {
                     self.transport
                         .send_webrtc_signaling_message(&response_msg)
                         .await?;
-                    println!("[{}] Sent answer to client", channel_id);
+                    debug!("[{}] Sent answer to client", channel_id);
                 }
             }
             WebrtcSignalingMessage::Candidate { candidate } => {
-                println!(
+                debug!(
                     "[{}] Received ICE candidate: {}",
                     channel_id, candidate.candidate
                 );
@@ -395,9 +396,9 @@ impl RtcConnectionHandler {
                     })
                     .await
                 {
-                    eprintln!("[{}] Failed to add ICE candidate: {}", channel_id, e);
+                    error!("[{}] Failed to add ICE candidate: {}", channel_id, e);
                 } else {
-                    println!("[{}] Added ICE candidate", channel_id);
+                    debug!("[{}] Added ICE candidate", channel_id);
                 }
             }
         }
@@ -675,10 +676,10 @@ async fn main() -> Result<()> {
                             api_clone,
                             video_track_clone,
                         );
-                        println!("RTC connection handler created");
+                        debug!("RTC connection handler created");
 
                         if let Err(e) = handler.run().await {
-                            eprintln!("Connection handler error: {}", e);
+                            error!("Connection handler error: {}", e);
                         }
                     });
                 }
@@ -686,7 +687,7 @@ async fn main() -> Result<()> {
                     old_state,
                     new_state,
                 } => {
-                    println!(
+                    info!(
                         "Connection state changed: {:?} -> {:?}",
                         old_state, new_state
                     );
@@ -709,11 +710,11 @@ async fn main() -> Result<()> {
                 Ok((n, _addr)) => {
                     // Forward RTP packet to all connected WebRTC peers
                     if let Err(e) = video_track_for_rtp.write(&buf[..n]).await {
-                        eprintln!("Error writing RTP packet to track: {}", e);
+                        error!("Error writing RTP packet to track: {}", e);
                     }
                 }
                 Err(e) => {
-                    eprintln!("Error receiving RTP packet: {}", e);
+                    error!("Error receiving RTP packet: {}", e);
                 }
             }
         }
@@ -727,7 +728,7 @@ async fn main() -> Result<()> {
     let device_task = tokio::spawn(async move {
         let mut device = device.lock().await;
         if let Err(e) = device.run().await {
-            eprintln!("Device error: {:?}", e);
+            error!("Device error: {:?}", e);
             process::exit(1);
         }
     });

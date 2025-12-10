@@ -4,6 +4,7 @@
 
 #![allow(dead_code)]
 
+use log::trace;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
@@ -46,11 +47,11 @@ impl Reliability {
     /// Send a reliable message
     pub fn send_reliable_message(&mut self, data: JsonValue) -> ReliabilityMessage {
         let assigned_seq = self.send_seq;
-        eprintln!(
+        trace!(
             "[RELIABILITY] Assigning sequence number {} to message",
             assigned_seq
         );
-        eprintln!(
+        trace!(
             "[RELIABILITY] Message preview: {:?}",
             serde_json::to_string(&data)
                 .unwrap_or_else(|_| "failed to serialize".to_string())
@@ -64,7 +65,7 @@ impl Reliability {
             data,
         };
         self.send_seq += 1;
-        eprintln!(
+        trace!(
             "[RELIABILITY] Next sequence number will be {}",
             self.send_seq
         );
@@ -86,29 +87,30 @@ impl Reliability {
 
     /// Handle ACK message
     fn handle_ack(&mut self, seq: u32) {
-        eprintln!("[RELIABILITY] Received ACK for seq {}", seq);
-        eprintln!(
+        trace!("[RELIABILITY] Received ACK for seq {}", seq);
+        trace!(
             "[RELIABILITY] Unacked queue has {} messages",
             self.unacked_messages.len()
         );
         if let Some(ReliabilityMessage::Data { seq: first_seq, .. }) = self.unacked_messages.first()
         {
-            eprintln!("[RELIABILITY] First unacked seq: {}", first_seq);
+            trace!("[RELIABILITY] First unacked seq: {}", first_seq);
             if *first_seq == seq {
                 self.unacked_messages.remove(0);
-                eprintln!(
+                trace!(
                     "[RELIABILITY] Removed message with seq {} from unacked queue. {} remaining",
                     seq,
                     self.unacked_messages.len()
                 );
             } else {
-                eprintln!(
+                trace!(
                     "[RELIABILITY] ACK seq {} doesn't match first unacked seq {}",
-                    seq, first_seq
+                    seq,
+                    first_seq
                 );
             }
         } else {
-            eprintln!("[RELIABILITY] No unacked messages to ACK");
+            trace!("[RELIABILITY] No unacked messages to ACK");
         }
     }
 
@@ -139,12 +141,12 @@ impl Reliability {
 
     /// Called when websocket connects/reconnects - retransmit unacked messages
     pub fn handle_connect(&self) -> Vec<ReliabilityMessage> {
-        eprintln!(
+        trace!(
             "[RELIABILITY] handle_connect called, {} unacked messages",
             self.unacked_messages.len()
         );
         for (i, msg) in self.unacked_messages.iter().enumerate() {
-            eprintln!("[RELIABILITY] Unacked message {}: {:?}", i, msg);
+            trace!("[RELIABILITY] Unacked message {}: {:?}", i, msg);
         }
         self.unacked_messages.clone()
     }
@@ -163,5 +165,36 @@ impl Reliability {
 impl Default for Reliability {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn init_logger() {
+        let _ = env_logger::builder().is_test(true).try_init();
+    }
+
+    #[test]
+    fn test_reliability_send_and_ack() {
+        init_logger();
+
+        let mut reliability = Reliability::new();
+
+        // Send a message - should log at trace level
+        let data = serde_json::json!({"test": "message"});
+        let msg = reliability.send_reliable_message(data);
+
+        // Verify it's a DATA message with seq 0
+        match &msg {
+            ReliabilityMessage::Data { seq, .. } => assert_eq!(*seq, 0),
+            _ => panic!("Expected DATA message"),
+        }
+
+        // Handle an ACK - should log at trace level
+        let ack = ReliabilityMessage::Ack { seq: 0 };
+        let result = reliability.handle_routing_message(ack);
+        assert!(result.is_none()); // ACK returns None
     }
 }
