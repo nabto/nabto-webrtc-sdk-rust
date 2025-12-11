@@ -41,6 +41,9 @@ pub struct SignalingClientService {
 }
 
 pub struct SignalingClient {
+    /// Name used for logging purposes
+    name: &'static str,
+
     signaling_url: String,
     event_tx: mpsc::Sender<SignalingClientEvent>,
 
@@ -89,9 +92,10 @@ impl SignalingClient {
 
         if let Some(cid) = response.channel_id {
             let mut client = Self {
+                name: "client",
                 signaling_url,
 
-                channel: SignalingChannel::new(cid.clone()),
+                channel: SignalingChannel::new("client", cid.clone()),
                 channel_handle: ChannelHandle::new(cid.clone(), channel_request_tx.clone()),
                 channel_request_rx,
 
@@ -136,7 +140,10 @@ impl SignalingClient {
                     if self.service.connection_state == SignalingConnectionState::WaitRetry {
                         // @TODO: Handle WaitRetry case
                         let wait_seconds = self.calculate_reconnect_delay();
-                        info!("Waiting {} seconds before reconnecting.", wait_seconds);
+                        info!(
+                            "[{}] Waiting {} seconds before reconnecting.",
+                            self.name, wait_seconds
+                        );
 
                         tokio::select! {
                             _ = tokio::time::sleep(Duration::from_secs(wait_seconds as u64)) => {}
@@ -163,11 +170,14 @@ impl SignalingClient {
                             self.set_connection_state(SignalingConnectionState::Connected);
                             self.connected_at = Some(Instant::now());
                             self.reconnect_counter = 0;
-                            info!("Successfully connected to signaling service");
+                            info!(
+                                "[{}] Successfully connected to signaling service",
+                                self.name
+                            );
                         }
 
                         Err(e) => {
-                            warn!("Connection failed: {:?}", e);
+                            warn!("[{}] Connection failed: {:?}", self.name, e);
                             self.set_connection_state(SignalingConnectionState::WaitRetry);
                             self.reconnect_counter += 1;
                         }
@@ -184,7 +194,7 @@ impl SignalingClient {
                                     }
 
                                     None => {
-                                        warn!("Websocket event channel was closed");
+                                        warn!("[{}] Websocket event channel was closed", self.name);
                                         self.transition_to_reconnect();
                                     }
                                 }
@@ -197,7 +207,7 @@ impl SignalingClient {
                             }
                         }
                     } else {
-                        error!("SignalingClient is in CONNECTED state but there is no websocket handle");
+                        error!("[{}] SignalingClient is in CONNECTED state but there is no websocket handle", self.name);
                         break;
                     }
                 }
@@ -231,7 +241,10 @@ impl SignalingClient {
                     .send_message_async(message, &self.service)
                     .await
                 {
-                    error!("Failed to send message on channel {}: {:?}", channel_id, e);
+                    error!(
+                        "[{}] Failed to send message on channel {}: {:?}",
+                        self.name, channel_id, e
+                    );
                 }
             }
 
@@ -251,7 +264,7 @@ impl SignalingClient {
             .map_err(|e| Error::WebSocket(format!("Failed to connect websocket: {}", e)))?;
 
         let config = WebSocketConfig::default();
-        let (connection, handle, event_rx) = WebSocketConnection::new(ws_stream, config);
+        let (connection, handle, event_rx) = WebSocketConnection::new(self.name, ws_stream, config);
 
         self.service.ws_handle = Some(handle);
         self.service.ws_event_rx = Some(event_rx);
@@ -266,13 +279,13 @@ impl SignalingClient {
     async fn handle_websocket_event(&mut self, event: ConnectionEvent) {
         match event {
             ConnectionEvent::Open => {
-                debug!("Websocket connection opened");
+                debug!("[{}] Websocket connection opened", self.name);
             }
 
             ConnectionEvent::Closed
             | ConnectionEvent::ConnectionError(_)
             | ConnectionEvent::PingTimeout => {
-                warn!("Websocket disconnected: {:?}", event);
+                warn!("[{}] Websocket disconnected: {:?}", self.name, event);
                 self.transition_to_reconnect();
             }
 
@@ -308,7 +321,7 @@ impl SignalingClient {
             .handle_routing_message(message, &self.service)
             .await
         {
-            error!("SignalingClient::handle_message error: {}", e);
+            error!("[{}] handle_message error: {}", self.name, e);
         }
     }
 
