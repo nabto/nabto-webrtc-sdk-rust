@@ -255,7 +255,7 @@ impl SignalingClient {
             .map_err(|e| Error::WebSocket(format!("Failed to connect websocket: {}", e)))?;
 
         let config = WebSocketConfig::default();
-        let (connection, handle, event_rx) = WebSocketConnection::new(ws_stream, config);
+        let (connection, handle, event_rx) = WebSocketConnection::new(self.name, ws_stream, config);
 
         self.service.ws_handle = Some(handle);
         self.service.ws_event_rx = Some(event_rx);

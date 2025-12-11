@@ -73,6 +73,9 @@ impl Default for WebSocketConfig {
 
 /// WebSocket connection manager
 pub struct WebSocketConnection {
+    /// Name used for logging purposes (e.g., "client" or "device")
+    name: &'static str,
+
     /// Channel to send events to the application
     event_tx: mpsc::Sender<ConnectionEvent>,
 
@@ -139,6 +142,7 @@ impl WebSocketConnection {
     ///
     /// Returns the connection object, a handle for sending commands, and a receiver for events
     pub fn new(
+        name: &'static str,
         ws_stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
         config: WebSocketConfig,
     ) -> (Self, WebSocketHandle, mpsc::Receiver<ConnectionEvent>) {
@@ -146,6 +150,7 @@ impl WebSocketConnection {
         let (command_tx, command_rx) = mpsc::channel(32);
 
         let connection = Self {
+            name,
             event_tx,
             command_rx,
             ws_stream,
@@ -174,7 +179,7 @@ impl WebSocketConnection {
                 // Check for PONG timeout if PING was sent
                 _ = timeout_interval.tick() => {
                     if self.check_ping_timeout() {
-                        warn!("PING timeout - no PONG received within {} seconds", self.config.pong_timeout_ms as f64 / 1000.0);
+                        warn!("[{}] PING timeout - no PONG received within {} seconds", self.name, self.config.pong_timeout_ms as f64 / 1000.0);
                         let _ = self.event_tx.send(ConnectionEvent::PingTimeout).await;
                         break;
                     }
@@ -185,11 +190,11 @@ impl WebSocketConnection {
                     match result {
                         Some(Ok(msg)) => {
                             if let Err(e) = self.handle_ws_message(msg).await {
-                                error!("Error handling WebSocket message: {}", e);
+                                error!("[{}] Error handling WebSocket message: {}", self.name, e);
                             }
                         }
                         Some(Err(e)) => {
-                            error!("WebSocket error: {}", e);
+                            error!("[{}] WebSocket error: {}", self.name, e);
                             let _ = self.event_tx.send(ConnectionEvent::ConnectionError(e.to_string())).await;
                             break;
                         }
@@ -206,7 +211,7 @@ impl WebSocketConnection {
                     match cmd {
                         Some(ConnectionCommand::SendMessage(msg)) => {
                             if let Err(e) = self.send_routing_message(&msg).await {
-                                error!("Failed to send message: {}", e);
+                                error!("[{}] Failed to send message: {}", self.name, e);
                                 let _ = self.event_tx.send(ConnectionEvent::ConnectionError(e)).await;
                             }
                         }
@@ -215,7 +220,7 @@ impl WebSocketConnection {
                             self.ping_sent_at = Some(Instant::now());
 
                             if let Err(e) = self.send_routing_message(&RoutingMessage::Ping).await {
-                                error!("Failed to send PING: {}", e);
+                                error!("[{}] Failed to send PING: {}", self.name, e);
                                 let _ = self.event_tx.send(ConnectionEvent::ConnectionError(e)).await;
                                 break;
                             }
@@ -262,7 +267,7 @@ impl WebSocketConnection {
             }
             WsMessage::Close(frame) => {
                 if let Some(CloseFrame { code, reason }) = frame {
-                    debug!("WebSocket closed with code {} reason: {}", code, reason);
+                    debug!("[{}] WebSocket closed with code {} reason: {}", self.name, code, reason);
                 }
             }
             WsMessage::Frame(_) => {
@@ -275,7 +280,7 @@ impl WebSocketConnection {
     /// Handle incoming routing message
     async fn handle_routing_message(&mut self, text: &str) -> Result<(), String> {
         // Log the WebSocket message being received
-        trace!("[WebSocket] Received message: {}", text);
+        trace!("[{}] Received message: {}", self.name, text);
 
         let routing_msg: RoutingMessage = serde_json::from_str(text)
             .map_err(|e| format!("Failed to parse routing message: {}", e))?;
@@ -336,7 +341,7 @@ impl WebSocketConnection {
             .map_err(|e| format!("Failed to serialize message: {}", e))?;
 
         // Log the WebSocket message being sent
-        trace!("[WebSocket] Sending message: {}", json);
+        trace!("[{}] Sending message: {}", self.name, json);
 
         self.ws_stream
             .send(WsMessage::Text(json))
