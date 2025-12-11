@@ -168,6 +168,14 @@ impl PerfectNegotiation {
             username_fragment: candidate_init.username_fragment,
         };
 
+        trace!(
+            "[{}] Sending candidate: candidate={}, sdp_mid={:?}, sdp_m_line_index={:?}",
+            self.name,
+            ice_candidate.candidate,
+            ice_candidate.sdp_mid,
+            ice_candidate.sdp_m_line_index
+        );
+
         let message = WebrtcSignalingMessage::Candidate {
             candidate: ice_candidate,
         };
@@ -247,6 +255,11 @@ impl PerfectNegotiation {
     }
 
     async fn handle_candidate(&self, candidate: IceCandidate) {
+        trace!(
+            "[{}] Received candidate: candidate={}, sdp_mid={:?}, sdp_m_line_index={:?}",
+            self.name, candidate.candidate, candidate.sdp_mid, candidate.sdp_m_line_index
+        );
+
         let ignore_offer = *self.ignore_offer.lock().await;
 
         let rtc_candidate = RTCIceCandidateInit {
