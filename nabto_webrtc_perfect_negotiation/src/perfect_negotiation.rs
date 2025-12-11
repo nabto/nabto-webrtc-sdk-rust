@@ -1,4 +1,4 @@
-use log::error;
+use log::{error, trace};
 use nabto_webrtc::Result as NabtoResult;
 use nabto_webrtc::util::ClientMessageTransport;
 use nabto_webrtc::util::DeviceMessageTransport;
@@ -22,6 +22,8 @@ pub enum PerfectNegotiationTransport {
 }
 
 pub struct PerfectNegotiation {
+    /// Name used for logging purposes (e.g., "client" or "device")
+    name: &'static str,
     making_offer: Arc<Mutex<bool>>,
     ignore_offer: Arc<Mutex<bool>>,
     is_setting_remote_answer_pending: Arc<Mutex<bool>>,
@@ -36,12 +38,13 @@ impl PerfectNegotiation {
         pc: Arc<RTCPeerConnection>,
         message_transport: PerfectNegotiationTransport,
     ) -> Arc<Self> {
-        let polite = match message_transport {
-            PerfectNegotiationTransport::Client { transport: _ } => false,
-            PerfectNegotiationTransport::Device { transport: _ } => true,
+        let (name, polite) = match message_transport {
+            PerfectNegotiationTransport::Client { transport: _ } => ("client", false),
+            PerfectNegotiationTransport::Device { transport: _ } => ("device", true),
         };
 
         let negotiation = Arc::new(Self {
+            name,
             making_offer: Arc::new(Mutex::new(false)),
             ignore_offer: Arc::new(Mutex::new(false)),
             is_setting_remote_answer_pending: Arc::new(Mutex::new(false)),
@@ -140,6 +143,13 @@ impl PerfectNegotiation {
             sdp: description.sdp,
         };
 
+        trace!(
+            "[{}] Sending description: type={}, sdp={}",
+            self.name,
+            session_desc.desc_type,
+            session_desc.sdp
+        );
+
         let message = WebrtcSignalingMessage::Description {
             description: session_desc,
         };
@@ -169,6 +179,13 @@ impl PerfectNegotiation {
     }
 
     async fn handle_description(&self, description: SessionDescription) {
+        trace!(
+            "[{}] Received description: type={}, sdp={}",
+            self.name,
+            description.desc_type,
+            description.sdp
+        );
+
         let result = async {
             let making_offer = *self.making_offer.lock().await;
             let is_setting_remote_answer_pending =

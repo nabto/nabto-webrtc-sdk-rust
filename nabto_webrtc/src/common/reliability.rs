@@ -24,6 +24,12 @@ pub enum ReliabilityMessage {
 /// Reliability layer for ensuring ordered, reliable message delivery
 #[derive(Debug, Clone)]
 pub struct Reliability {
+    /// Name used for logging purposes (e.g., "client" or "device")
+    name: &'static str,
+
+    /// Channel ID used for logging purposes
+    channel_id: String,
+
     /// Next sequence number to send
     send_seq: u32,
 
@@ -36,8 +42,10 @@ pub struct Reliability {
 
 impl Reliability {
     /// Create a new reliability layer
-    pub fn new() -> Self {
+    pub fn new(name: &'static str, channel_id: String) -> Self {
         Self {
+            name,
+            channel_id,
             send_seq: 0,
             recv_seq: 0,
             unacked_messages: Vec::new(),
@@ -48,11 +56,15 @@ impl Reliability {
     pub fn send_reliable_message(&mut self, data: JsonValue) -> ReliabilityMessage {
         let assigned_seq = self.send_seq;
         trace!(
-            "[RELIABILITY] Assigning sequence number {} to message",
+            "[{}] [{}] Assigning sequence number {} to message",
+            self.name,
+            self.channel_id,
             assigned_seq
         );
         trace!(
-            "[RELIABILITY] Message preview: {:?}",
+            "[{}] [{}] Message preview: {:?}",
+            self.name,
+            self.channel_id,
             serde_json::to_string(&data)
                 .unwrap_or_else(|_| "failed to serialize".to_string())
                 .chars()
@@ -66,7 +78,9 @@ impl Reliability {
         };
         self.send_seq += 1;
         trace!(
-            "[RELIABILITY] Next sequence number will be {}",
+            "[{}] [{}] Next sequence number will be {}",
+            self.name,
+            self.channel_id,
             self.send_seq
         );
 
@@ -87,30 +101,36 @@ impl Reliability {
 
     /// Handle ACK message
     fn handle_ack(&mut self, seq: u32) {
-        trace!("[RELIABILITY] Received ACK for seq {}", seq);
+        trace!("[{}] [{}] Received ACK for seq {}", self.name, self.channel_id, seq);
         trace!(
-            "[RELIABILITY] Unacked queue has {} messages",
+            "[{}] [{}] Unacked queue has {} messages",
+            self.name,
+            self.channel_id,
             self.unacked_messages.len()
         );
         if let Some(ReliabilityMessage::Data { seq: first_seq, .. }) = self.unacked_messages.first()
         {
-            trace!("[RELIABILITY] First unacked seq: {}", first_seq);
+            trace!("[{}] [{}] First unacked seq: {}", self.name, self.channel_id, first_seq);
             if *first_seq == seq {
                 self.unacked_messages.remove(0);
                 trace!(
-                    "[RELIABILITY] Removed message with seq {} from unacked queue. {} remaining",
+                    "[{}] [{}] Removed message with seq {} from unacked queue. {} remaining",
+                    self.name,
+                    self.channel_id,
                     seq,
                     self.unacked_messages.len()
                 );
             } else {
                 trace!(
-                    "[RELIABILITY] ACK seq {} doesn't match first unacked seq {}",
+                    "[{}] [{}] ACK seq {} doesn't match first unacked seq {}",
+                    self.name,
+                    self.channel_id,
                     seq,
                     first_seq
                 );
             }
         } else {
-            trace!("[RELIABILITY] No unacked messages to ACK");
+            trace!("[{}] [{}] No unacked messages to ACK", self.name, self.channel_id);
         }
     }
 
@@ -142,11 +162,13 @@ impl Reliability {
     /// Called when websocket connects/reconnects - retransmit unacked messages
     pub fn handle_connect(&self) -> Vec<ReliabilityMessage> {
         trace!(
-            "[RELIABILITY] handle_connect called, {} unacked messages",
+            "[{}] [{}] handle_connect called, {} unacked messages",
+            self.name,
+            self.channel_id,
             self.unacked_messages.len()
         );
         for (i, msg) in self.unacked_messages.iter().enumerate() {
-            trace!("[RELIABILITY] Unacked message {}: {:?}", i, msg);
+            trace!("[{}] [{}] Unacked message {}: {:?}", self.name, self.channel_id, i, msg);
         }
         self.unacked_messages.clone()
     }
@@ -164,7 +186,7 @@ impl Reliability {
 
 impl Default for Reliability {
     fn default() -> Self {
-        Self::new()
+        Self::new("unknown", String::new())
     }
 }
 
@@ -180,7 +202,7 @@ mod tests {
     fn test_reliability_send_and_ack() {
         init_logger();
 
-        let mut reliability = Reliability::new();
+        let mut reliability = Reliability::new("test", "test-channel".to_string());
 
         // Send a message - should log at trace level
         let data = serde_json::json!({"test": "message"});

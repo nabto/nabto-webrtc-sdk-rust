@@ -127,6 +127,8 @@ enum Operation {
 /// Represents a logical channel between two peers through the WebSocket relay
 #[derive(Debug, Clone)]
 pub struct SignalingChannel {
+    /// Name used for logging purposes (e.g., "client" or "device")
+    name: &'static str,
     channel_id: String,
     state: SignalingChannelState,
     reliability: Reliability,
@@ -139,11 +141,12 @@ pub struct SignalingChannel {
 
 impl SignalingChannel {
     /// Create a new signaling channel for an incoming connection
-    pub fn new(channel_id: String) -> Self {
+    pub fn new(name: &'static str, channel_id: String) -> Self {
         Self {
-            channel_id,
+            name,
+            channel_id: channel_id.clone(),
             state: SignalingChannelState::New,
-            reliability: Reliability::new(),
+            reliability: Reliability::new(name, channel_id),
             operations: VecDeque::new(),
             handling_operations: false,
             message_tx: None,
@@ -250,22 +253,24 @@ impl SignalingChannel {
             || self.state == SignalingChannelState::Failed
         {
             debug!(
-                "[CHANNEL {}] Skipping retransmit - channel state: {:?}",
-                self.channel_id, self.state
+                "[{}] [CHANNEL {}] Skipping retransmit - channel state: {:?}",
+                self.name, self.channel_id, self.state
             );
             return;
         }
 
         let messages = self.reliability.handle_connect();
         debug!(
-            "[CHANNEL {}] Retransmitting {} unacked messages",
+            "[{}] [CHANNEL {}] Retransmitting {} unacked messages",
+            self.name,
             self.channel_id,
             messages.len()
         );
 
         for msg in messages {
             trace!(
-                "[CHANNEL {}] Retransmitting message: {:?}",
+                "[{}] [CHANNEL {}] Retransmitting message: {:?}",
+                self.name,
                 self.channel_id,
                 msg
             );
@@ -311,7 +316,7 @@ impl SignalingChannel {
             return;
         }
         // TODO: Emit error event
-        error!("Channel {} error: {:?}", self.channel_id, error);
+        error!("[{}] Channel {} error: {:?}", self.name, self.channel_id, error);
         self.set_state(SignalingChannelState::Failed);
     }
 
