@@ -267,7 +267,10 @@ impl WebSocketConnection {
             }
             WsMessage::Close(frame) => {
                 if let Some(CloseFrame { code, reason }) = frame {
-                    debug!("[{}] WebSocket closed with code {} reason: {}", self.name, code, reason);
+                    debug!(
+                        "[{}] WebSocket closed with code {} reason: {}",
+                        self.name, code, reason
+                    );
                 }
             }
             WsMessage::Frame(_) => {

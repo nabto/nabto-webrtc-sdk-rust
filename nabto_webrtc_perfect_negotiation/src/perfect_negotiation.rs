@@ -145,9 +145,7 @@ impl PerfectNegotiation {
 
         trace!(
             "[{}] Sending description: type={}, sdp={}",
-            self.name,
-            session_desc.desc_type,
-            session_desc.sdp
+            self.name, session_desc.desc_type, session_desc.sdp
         );
 
         let message = WebrtcSignalingMessage::Description {
@@ -181,9 +179,7 @@ impl PerfectNegotiation {
     async fn handle_description(&self, description: SessionDescription) {
         trace!(
             "[{}] Received description: type={}, sdp={}",
-            self.name,
-            description.desc_type,
-            description.sdp
+            self.name, description.desc_type, description.sdp
         );
 
         let result = async {

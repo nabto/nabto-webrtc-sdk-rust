@@ -316,7 +316,10 @@ impl SignalingChannel {
             return;
         }
         // TODO: Emit error event
-        error!("[{}] Channel {} error: {:?}", self.name, self.channel_id, error);
+        error!(
+            "[{}] Channel {} error: {:?}",
+            self.name, self.channel_id, error
+        );
         self.set_state(SignalingChannelState::Failed);
     }
 

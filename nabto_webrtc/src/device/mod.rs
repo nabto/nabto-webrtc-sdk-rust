@@ -227,7 +227,10 @@ impl SignalingDevice {
                     // Calculate retry delay if we're in WaitRetry
                     if self.state == SignalingConnectionState::WaitRetry {
                         let wait_seconds = self.calculate_reconnect_delay();
-                        info!("[{}] Waiting {} seconds before reconnecting...", self.name, wait_seconds);
+                        info!(
+                            "[{}] Waiting {} seconds before reconnecting...",
+                            self.name, wait_seconds
+                        );
 
                         tokio::select! {
                             _ = tokio::time::sleep(Duration::from_secs(wait_seconds as u64)) => {},
@@ -254,7 +257,10 @@ impl SignalingDevice {
                             self.set_state(SignalingConnectionState::Connected);
                             self.connected_at = Some(Instant::now());
                             self.reconnect_counter = 0;
-                            info!("[{}] Successfully connected to signaling service", self.name);
+                            info!(
+                                "[{}] Successfully connected to signaling service",
+                                self.name
+                            );
 
                             // Retransmit unacked messages for all existing channels after reconnection
                             self.retransmit_unacked_messages().await;
@@ -311,7 +317,10 @@ impl SignalingDevice {
                         }
                     } else {
                         // No event receiver, shouldn't happen
-                        error!("[{}] No WebSocket event receiver in Connected state", self.name);
+                        error!(
+                            "[{}] No WebSocket event receiver in Connected state",
+                            self.name
+                        );
                         break;
                     }
                 }
@@ -411,7 +420,11 @@ impl SignalingDevice {
                 message,
                 authorized,
             } => {
-                trace!("[{}] Received MESSAGE event for channel {}", self.name, channel_id);
+                trace!(
+                    "[{}] Received MESSAGE event for channel {}",
+                    self.name,
+                    channel_id
+                );
                 self.handle_message(channel_id, message, authorized).await;
             }
             ConnectionEvent::Error {
@@ -456,12 +469,18 @@ impl SignalingDevice {
                 // We need to remove the channel temporarily to avoid borrowing issues
                 if let Some(mut channel) = self.channels.remove(&channel_id) {
                     if let Err(e) = channel.send_message_async(message, self).await {
-                        error!("[{}] Failed to send message on channel {}: {:?}", self.name, channel_id, e);
+                        error!(
+                            "[{}] Failed to send message on channel {}: {:?}",
+                            self.name, channel_id, e
+                        );
                     }
                     // Put the channel back
                     self.channels.insert(channel_id, channel);
                 } else {
-                    warn!("[{}] Channel {} not found for sending message", self.name, channel_id);
+                    warn!(
+                        "[{}] Channel {} not found for sending message",
+                        self.name, channel_id
+                    );
                 }
             }
             ChannelRequest::SendError { channel_id, error } => {
@@ -575,17 +594,26 @@ impl SignalingDevice {
 
             // Dispatch to existing channel
             if let Err(e) = channel.handle_routing_message(message, self).await {
-                error!("[{}] Error handling message on channel {}: {:?}", self.name, channel_id, e);
+                error!(
+                    "[{}] Error handling message on channel {}: {:?}",
+                    self.name, channel_id, e
+                );
             }
 
             // Put the channel back
             self.channels.insert(channel_id, channel);
         } else {
-            trace!("[{}] No existing channel, checking if initial message...", self.name);
+            trace!(
+                "[{}] No existing channel, checking if initial message...",
+                self.name
+            );
             // No existing channel - check if this is an initial message (seq 0)
             match SignalingChannel::is_initial_message(&message) {
                 Ok(true) => {
-                    debug!("[{}] Initial message detected, creating new channel", self.name);
+                    debug!(
+                        "[{}] Initial message detected, creating new channel",
+                        self.name
+                    );
                     // Create new channel with message channel set up
                     let channel_for_map = SignalingChannel::new(self.name, channel_id.clone());
                     let (mut channel_with_rx, message_rx) = channel_for_map.with_message_channel();

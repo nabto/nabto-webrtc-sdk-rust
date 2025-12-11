@@ -101,7 +101,12 @@ impl Reliability {
 
     /// Handle ACK message
     fn handle_ack(&mut self, seq: u32) {
-        trace!("[{}] [{}] Received ACK for seq {}", self.name, self.channel_id, seq);
+        trace!(
+            "[{}] [{}] Received ACK for seq {}",
+            self.name,
+            self.channel_id,
+            seq
+        );
         trace!(
             "[{}] [{}] Unacked queue has {} messages",
             self.name,
@@ -110,7 +115,12 @@ impl Reliability {
         );
         if let Some(ReliabilityMessage::Data { seq: first_seq, .. }) = self.unacked_messages.first()
         {
-            trace!("[{}] [{}] First unacked seq: {}", self.name, self.channel_id, first_seq);
+            trace!(
+                "[{}] [{}] First unacked seq: {}",
+                self.name,
+                self.channel_id,
+                first_seq
+            );
             if *first_seq == seq {
                 self.unacked_messages.remove(0);
                 trace!(
@@ -130,7 +140,11 @@ impl Reliability {
                 );
             }
         } else {
-            trace!("[{}] [{}] No unacked messages to ACK", self.name, self.channel_id);
+            trace!(
+                "[{}] [{}] No unacked messages to ACK",
+                self.name,
+                self.channel_id
+            );
         }
     }
 
@@ -168,7 +182,13 @@ impl Reliability {
             self.unacked_messages.len()
         );
         for (i, msg) in self.unacked_messages.iter().enumerate() {
-            trace!("[{}] [{}] Unacked message {}: {:?}", self.name, self.channel_id, i, msg);
+            trace!(
+                "[{}] [{}] Unacked message {}: {:?}",
+                self.name,
+                self.channel_id,
+                i,
+                msg
+            );
         }
         self.unacked_messages.clone()
     }

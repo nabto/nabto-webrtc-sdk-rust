@@ -140,7 +140,10 @@ impl SignalingClient {
                     if self.service.connection_state == SignalingConnectionState::WaitRetry {
                         // @TODO: Handle WaitRetry case
                         let wait_seconds = self.calculate_reconnect_delay();
-                        info!("[{}] Waiting {} seconds before reconnecting.", self.name, wait_seconds);
+                        info!(
+                            "[{}] Waiting {} seconds before reconnecting.",
+                            self.name, wait_seconds
+                        );
 
                         tokio::select! {
                             _ = tokio::time::sleep(Duration::from_secs(wait_seconds as u64)) => {}
@@ -167,7 +170,10 @@ impl SignalingClient {
                             self.set_connection_state(SignalingConnectionState::Connected);
                             self.connected_at = Some(Instant::now());
                             self.reconnect_counter = 0;
-                            info!("[{}] Successfully connected to signaling service", self.name);
+                            info!(
+                                "[{}] Successfully connected to signaling service",
+                                self.name
+                            );
                         }
 
                         Err(e) => {
@@ -235,7 +241,10 @@ impl SignalingClient {
                     .send_message_async(message, &self.service)
                     .await
                 {
-                    error!("[{}] Failed to send message on channel {}: {:?}", self.name, channel_id, e);
+                    error!(
+                        "[{}] Failed to send message on channel {}: {:?}",
+                        self.name, channel_id, e
+                    );
                 }
             }
 
