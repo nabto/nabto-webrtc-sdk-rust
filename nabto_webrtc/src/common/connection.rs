@@ -14,7 +14,7 @@ use serde_json::Value as JsonValue;
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
-use tokio::time::{interval, Instant};
+use tokio::time::Instant;
 use tokio_tungstenite::{
     tungstenite::{protocol::CloseFrame, Message as WsMessage},
     MaybeTlsStream, WebSocketStream,
@@ -170,14 +170,25 @@ impl WebSocketConnection {
         // Notify that connection is open
         let _ = self.event_tx.send(ConnectionEvent::Open).await;
 
-        // Set up PONG timeout checker (every 100ms)
-        let mut timeout_interval = interval(Duration::from_millis(100));
-        timeout_interval.tick().await; // First tick completes immediately
-
         loop {
+            // Calculate the timeout future - only active when PING is pending
+            let timeout_future = async {
+                match self.ping_sent_at {
+                    Some(ping_time) => {
+                        let timeout_duration = Duration::from_millis(self.config.pong_timeout_ms);
+                        let deadline = ping_time + timeout_duration;
+                        tokio::time::sleep_until(deadline.into()).await;
+                    }
+                    None => {
+                        // No PING pending, wait forever (other branches will wake us)
+                        std::future::pending::<()>().await;
+                    }
+                }
+            };
+
             tokio::select! {
                 // Check for PONG timeout if PING was sent
-                _ = timeout_interval.tick() => {
+                _ = timeout_future => {
                     if self.check_ping_timeout() {
                         warn!("[{}] PING timeout - no PONG received within {} seconds", self.name, self.config.pong_timeout_ms as f64 / 1000.0);
                         let _ = self.event_tx.send(ConnectionEvent::PingTimeout).await;
