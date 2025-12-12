@@ -177,7 +177,7 @@ impl WebSocketConnection {
                     Some(ping_time) => {
                         let timeout_duration = Duration::from_millis(self.config.pong_timeout_ms);
                         let deadline = ping_time + timeout_duration;
-                        tokio::time::sleep_until(deadline.into()).await;
+                        tokio::time::sleep_until(deadline).await;
                     }
                     None => {
                         // No PING pending, wait forever (other branches will wake us)
