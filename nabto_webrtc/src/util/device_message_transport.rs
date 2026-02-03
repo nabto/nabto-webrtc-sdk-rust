@@ -109,7 +109,7 @@ impl DeviceMessageTransport {
             options: self.options.clone(),
             event_tx: self.event_tx.clone(),
             event_rx: Arc::new(Mutex::new(None)), // Task doesn't need the receiver
-            is_owner: false, // Clones don't own the channel
+            is_owner: false,                      // Clones don't own the channel
         }
     }
 
