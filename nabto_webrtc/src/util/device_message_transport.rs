@@ -53,6 +53,7 @@ pub struct DeviceMessageTransport {
     options: DeviceMessageTransportOptions,
     event_tx: mpsc::UnboundedSender<MessageTransportEvent>,
     event_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<MessageTransportEvent>>>>,
+    is_owner: bool,
 }
 
 impl DeviceMessageTransport {
@@ -76,6 +77,7 @@ impl DeviceMessageTransport {
             options,
             event_tx,
             event_rx: Arc::new(Mutex::new(Some(event_rx))),
+            is_owner: true,
         };
 
         // Spawn a background task to handle incoming messages
@@ -107,6 +109,7 @@ impl DeviceMessageTransport {
             options: self.options.clone(),
             event_tx: self.event_tx.clone(),
             event_rx: Arc::new(Mutex::new(None)), // Task doesn't need the receiver
+            is_owner: false,                      // Clones don't own the channel
         }
     }
 
@@ -324,6 +327,15 @@ impl DeviceMessageTransport {
 impl Clone for DeviceMessageTransport {
     fn clone(&self) -> Self {
         self.clone_for_task()
+    }
+}
+
+// Close the channel when the owner is dropped to allow the background task to exit
+impl Drop for DeviceMessageTransport {
+    fn drop(&mut self) {
+        if self.is_owner {
+            self.handle.try_close();
+        }
     }
 }
 
