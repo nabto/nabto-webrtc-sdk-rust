@@ -80,6 +80,12 @@ impl ChannelHandle {
             .await
             .map_err(|e| crate::Error::Signaling(format!("Failed to close channel: {}", e)))
     }
+
+    pub fn try_close(&self) {
+        let _ = self.device_tx.try_send(ChannelRequest::Close {
+            channel_id: self.channel_id.clone(),
+        });
+    }
 }
 
 /// Trait for SignalingChannel to communicate with SignalingDevice
