@@ -75,6 +75,9 @@ pub struct WebSocketConnection {
 
     /// State for check_alive: (pong_counter at check time, deadline instant)
     check_alive_state: Option<(u64, Instant)>,
+
+    /// Pong counter stored at the last heartbeat ping, used to verify liveness
+    heartbeat_pong_counter: Option<u64>,
 }
 
 /// Commands that can be sent to the WebSocket connection
@@ -140,6 +143,7 @@ impl WebSocketConnection {
             ws_stream,
             pong_counter: 0,
             check_alive_state: None,
+            heartbeat_pong_counter: None,
         };
 
         let handle = WebSocketHandle { command_tx };
@@ -151,8 +155,13 @@ impl WebSocketConnection {
     ///
     /// This should be spawned as a task: `tokio::spawn(connection.run())`
     pub async fn run(mut self) {
+        const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+
         // Notify that connection is open
         let _ = self.event_tx.send(ConnectionEvent::Open).await;
+
+        let mut heartbeat_interval =
+            tokio::time::interval_at(Instant::now() + HEARTBEAT_INTERVAL, HEARTBEAT_INTERVAL);
 
         loop {
             // Calculate the timeout future - only active when check_alive is pending
@@ -200,6 +209,24 @@ impl WebSocketConnection {
                             break;
                         }
                     }
+                }
+
+                // Heartbeat: periodically send PING and check for PONG
+                _ = heartbeat_interval.tick() => {
+                    if let Some(last_pong_counter) = self.heartbeat_pong_counter {
+                        if self.pong_counter <= last_pong_counter {
+                            warn!("[{}] Heartbeat timeout - no PONG received since last heartbeat", self.name);
+                            let _ = self.event_tx.send(ConnectionEvent::PingTimeout).await;
+                            break;
+                        }
+                    }
+                    self.heartbeat_pong_counter = Some(self.pong_counter);
+                    if let Err(e) = self.send_routing_message(&RoutingMessage::Ping).await {
+                        error!("[{}] Failed to send heartbeat PING: {}", self.name, e);
+                        let _ = self.event_tx.send(ConnectionEvent::ConnectionError(e)).await;
+                        break;
+                    }
+                    debug!("[{}] Heartbeat PING sent", self.name);
                 }
 
                 // Receive commands from application
