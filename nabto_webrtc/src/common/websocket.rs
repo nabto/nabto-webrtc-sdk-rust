@@ -70,8 +70,11 @@ pub struct WebSocketConnection {
     /// WebSocket stream
     ws_stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
 
-    /// Time when PING was sent and the timeout duration (for timeout detection)
-    ping_sent_at: Option<(Instant, Duration)>,
+    /// Counter incremented for each PONG received
+    pong_counter: u64,
+
+    /// State for check_alive: (pong_counter at check time, deadline instant)
+    check_alive_state: Option<(u64, Instant)>,
 }
 
 /// Commands that can be sent to the WebSocket connection
@@ -135,7 +138,8 @@ impl WebSocketConnection {
             event_tx,
             command_rx,
             ws_stream,
-            ping_sent_at: None,
+            pong_counter: 0,
+            check_alive_state: None,
         };
 
         let handle = WebSocketHandle { command_tx };
@@ -151,27 +155,29 @@ impl WebSocketConnection {
         let _ = self.event_tx.send(ConnectionEvent::Open).await;
 
         loop {
-            // Calculate the timeout future - only active when PING is pending
+            // Calculate the timeout future - only active when check_alive is pending
             let timeout_future = async {
-                match self.ping_sent_at {
-                    Some((ping_time, timeout_duration)) => {
-                        let deadline = ping_time + timeout_duration;
+                match self.check_alive_state {
+                    Some((_pong_counter_at_check, deadline)) => {
                         tokio::time::sleep_until(deadline).await;
                     }
                     None => {
-                        // No PING pending, wait forever (other branches will wake us)
+                        // No check_alive pending, wait forever (other branches will wake us)
                         std::future::pending::<()>().await;
                     }
                 }
             };
 
             tokio::select! {
-                // Check for PONG timeout if PING was sent
+                // Check for PONG timeout if check_alive is pending
                 _ = timeout_future => {
-                    if let Some(timeout_duration) = self.check_ping_timeout() {
-                        warn!("[{}] PING timeout - no PONG received within {} seconds", self.name, timeout_duration.as_secs_f64());
-                        let _ = self.event_tx.send(ConnectionEvent::PingTimeout).await;
-                        break;
+                    if let Some((pong_counter_at_check, _deadline)) = self.check_alive_state.take() {
+                        if self.pong_counter == pong_counter_at_check {
+                            warn!("[{}] PING timeout - no PONG received since check_alive", self.name);
+                            let _ = self.event_tx.send(ConnectionEvent::PingTimeout).await;
+                            break;
+                        }
+                        debug!("[{}] check_alive succeeded (pong_counter incremented)", self.name);
                     }
                 }
 
@@ -206,8 +212,9 @@ impl WebSocketConnection {
                             }
                         }
                         Some(ConnectionCommand::CheckAlive { timeout_ms }) => {
-                            // Arm the PONG timeout timer
-                            self.ping_sent_at = Some((Instant::now(), Duration::from_millis(timeout_ms)));
+                            // Store current pong counter and set deadline
+                            let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+                            self.check_alive_state = Some((self.pong_counter, deadline));
 
                             if let Err(e) = self.send_routing_message(&RoutingMessage::Ping).await {
                                 error!("[{}] Failed to send PING: {}", self.name, e);
@@ -225,17 +232,6 @@ impl WebSocketConnection {
                 }
             }
         }
-    }
-
-    /// Check if PING timeout has occurred
-    /// Returns the timeout duration if timed out, None otherwise
-    fn check_ping_timeout(&self) -> Option<Duration> {
-        if let Some((ping_time, timeout_duration)) = self.ping_sent_at {
-            if ping_time.elapsed() > timeout_duration {
-                return Some(timeout_duration);
-            }
-        }
-        None
     }
 
     /// Handle incoming WebSocket message
@@ -316,8 +312,8 @@ impl WebSocketConnection {
                     .await;
             }
             RoutingMessage::Pong => {
-                // Clear the check_alive timeout timer (PONG received successfully)
-                self.ping_sent_at = None;
+                // Increment pong counter (check_alive will compare against this)
+                self.pong_counter += 1;
             }
             RoutingMessage::Ping => {
                 // Respond with PONG
