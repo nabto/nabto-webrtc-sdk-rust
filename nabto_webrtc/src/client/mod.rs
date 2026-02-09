@@ -25,6 +25,7 @@ pub enum SignalingClientEvent {
     Error,
 }
 
+#[allow(dead_code)]
 pub struct SignalingClientOptions {
     pub(crate) product_id: String,
     pub(crate) device_id: String,
