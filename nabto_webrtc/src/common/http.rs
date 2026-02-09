@@ -92,7 +92,11 @@ impl HttpApi {
             endpoint_url,
             product_id,
             device_id,
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .expect("Failed to build HTTP client"),
         }
     }
 

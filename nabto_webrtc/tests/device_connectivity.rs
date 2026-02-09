@@ -14,6 +14,7 @@ mod common;
 use common::{init_logger, DeviceTestInstance, DeviceTestOptions};
 use nabto_webrtc::common::SignalingConnectionState;
 use std::time::Duration;
+use tokio::time::Instant;
 
 /// Device Connectivity Test 1:
 /// OK connection. This tests that the device can connect to the signaling service.
@@ -273,5 +274,143 @@ async fn test_device_ws_unknown_message_type() {
 
     // Cleanup
     device.stop().await; // Stop device("Failed to close device");
+    test.destroy().await.expect("Failed to destroy test");
+}
+
+/// Device Connectivity Test 9:
+/// Heartbeat keeps connection alive. The server is configured with a short idle
+/// timeout that would close the WebSocket if no messages arrive. The heartbeat
+/// PINGs keep the connection alive by resetting the server's idle timer.
+#[tokio::test]
+#[ignore] // Requires integration test server to be running
+async fn test_device_heartbeat_keeps_connection_alive() {
+    init_logger();
+
+    // Server will close the connection if no messages arrive within 300ms
+    let mut test = DeviceTestInstance::create(DeviceTestOptions {
+        idle_timeout_ms: Some(300),
+        ..Default::default()
+    })
+    .await
+    .expect("Failed to create test instance");
+
+    // Heartbeat every 200ms keeps the server's 300ms idle timeout from firing
+    test.heartbeat_interval = Some(Duration::from_millis(200));
+
+    let (device, _event_rx) = test.start_signaling_device();
+
+    device
+        .wait_for_state(SignalingConnectionState::Connected, Duration::from_secs(5))
+        .await
+        .expect("Device did not reach Connected state");
+
+    // Wait well beyond the server's idle timeout — heartbeat should keep it alive
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    assert_eq!(
+        device.connection_state().await,
+        SignalingConnectionState::Connected,
+        "Device should remain connected when heartbeat keeps the idle timeout from firing"
+    );
+
+    // Cleanup
+    device.stop().await;
+    test.destroy().await.expect("Failed to destroy test");
+}
+
+/// Device Connectivity Test 10:
+/// Server idle timeout fires before heartbeat. The server's idle timeout is
+/// shorter than the device's heartbeat interval, so the server closes the
+/// connection before a heartbeat PING arrives. The device should detect the
+/// closure and transition to WaitRetry, then reconnect.
+#[tokio::test]
+#[ignore] // Requires integration test server to be running
+async fn test_device_server_idle_timeout_disconnects() {
+    init_logger();
+
+    // Server closes after 200ms of inactivity, but heartbeat only fires every 500ms
+    let mut test = DeviceTestInstance::create(DeviceTestOptions {
+        idle_timeout_ms: Some(200),
+        ..Default::default()
+    })
+    .await
+    .expect("Failed to create test instance");
+
+    test.heartbeat_interval = Some(Duration::from_millis(500));
+
+    let (device, _event_rx) = test.start_signaling_device();
+
+    device
+        .wait_for_state(SignalingConnectionState::Connected, Duration::from_secs(5))
+        .await
+        .expect("Device did not reach Connected state");
+
+    // Server should close the connection before the first heartbeat PING arrives
+    device
+        .wait_for_state(SignalingConnectionState::WaitRetry, Duration::from_secs(5))
+        .await
+        .expect("Device should have disconnected due to server idle timeout");
+
+    // The device should automatically reconnect
+    device
+        .wait_for_state(SignalingConnectionState::Connected, Duration::from_secs(10))
+        .await
+        .expect("Device did not reconnect after server idle timeout");
+
+    // Cleanup
+    device.stop().await;
+    test.destroy().await.expect("Failed to destroy test");
+}
+
+/// Device Connectivity Test 11:
+/// Heartbeat detects dead connection. Drop device messages so the server never
+/// sees PINGs and never responds with PONGs, then verify the device detects the
+/// failure, transitions to WaitRetry, and reconnects back to Connected.
+#[tokio::test]
+#[ignore] // Requires integration test server to be running
+async fn test_device_heartbeat_detects_dead_connection() {
+    init_logger();
+    let mut test = DeviceTestInstance::create(DeviceTestOptions::default())
+        .await
+        .expect("Failed to create test instance");
+
+    // Use a short heartbeat so the test completes quickly
+    test.heartbeat_interval = Some(Duration::from_millis(200));
+
+    let (device, _event_rx) = test.start_signaling_device();
+
+    device
+        .wait_for_state(SignalingConnectionState::Connected, Duration::from_secs(5))
+        .await
+        .expect("Device did not reach Connected state");
+
+    // Drop all messages from the device so PINGs never reach the server
+    test.drop_device_messages()
+        .await
+        .expect("Failed to drop device messages");
+
+    let start = Instant::now();
+
+    // Device should detect the dead connection via heartbeat timeout
+    // and transition to WaitRetry
+    device
+        .wait_for_state(SignalingConnectionState::WaitRetry, Duration::from_secs(5))
+        .await
+        .expect("Device did not detect dead connection via heartbeat");
+
+    let elapsed = start.elapsed();
+    println!(
+        "Heartbeat detected dead connection in {:?} (expected ~400ms)",
+        elapsed
+    );
+
+    // The device should automatically reconnect back to Connected
+    device
+        .wait_for_state(SignalingConnectionState::Connected, Duration::from_secs(10))
+        .await
+        .expect("Device did not reconnect after heartbeat timeout");
+
+    // Cleanup
+    device.stop().await;
     test.destroy().await.expect("Failed to destroy test");
 }

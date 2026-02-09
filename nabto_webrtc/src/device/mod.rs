@@ -96,6 +96,10 @@ pub struct SignalingDeviceOptions {
 
     /// Token generator called when a new access token is needed
     pub(crate) token_generator: TokenGenerator,
+
+    /// Interval between heartbeat PINGs, or None to disable heartbeat.
+    /// Defaults to 30 seconds.
+    pub(crate) heartbeat_interval: Option<Duration>,
 }
 
 /// Builder for [`SignalingDeviceOptions`].
@@ -118,6 +122,7 @@ pub struct SignalingDeviceOptionsBuilder {
     device_id: String,
     token_generator: TokenGenerator,
     endpoint_url: Option<String>,
+    heartbeat_interval: Option<Duration>,
 }
 
 impl SignalingDeviceOptions {
@@ -132,6 +137,7 @@ impl SignalingDeviceOptions {
             device_id,
             token_generator,
             endpoint_url: None,
+            heartbeat_interval: Some(Duration::from_secs(30)),
         }
     }
 }
@@ -145,6 +151,14 @@ impl SignalingDeviceOptionsBuilder {
         self
     }
 
+    /// Set the heartbeat interval for WebSocket keepalive PINGs.
+    ///
+    /// Defaults to 30 seconds. Pass `None` to disable the heartbeat.
+    pub fn heartbeat_interval(mut self, interval: Option<Duration>) -> Self {
+        self.heartbeat_interval = interval;
+        self
+    }
+
     /// Build the `SignalingDeviceOptions`.
     pub fn build(self) -> SignalingDeviceOptions {
         SignalingDeviceOptions {
@@ -152,6 +166,7 @@ impl SignalingDeviceOptionsBuilder {
             product_id: self.product_id,
             device_id: self.device_id,
             token_generator: self.token_generator,
+            heartbeat_interval: self.heartbeat_interval,
         }
     }
 }
@@ -573,7 +588,7 @@ impl SignalingDevice {
 
         // Step 3: Create WebSocketConnection and spawn it as a task
         let (connection, handle, event_rx) =
-            WebSocketConnection::new(self.name, ws_stream, Some(Duration::from_secs(30)));
+            WebSocketConnection::new(self.name, ws_stream, self.options.heartbeat_interval);
 
         self.ws_handle = Some(handle);
         self.ws_event_rx = Some(event_rx);

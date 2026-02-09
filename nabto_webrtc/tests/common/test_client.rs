@@ -20,6 +20,9 @@ pub struct DeviceTestOptions {
     pub product_id_not_found: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub device_id_not_found: Option<bool>,
+    /// Server closes the WebSocket if no messages are received within this period (ms).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idle_timeout_ms: Option<u64>,
 }
 
 /// Response from creating a test device instance
