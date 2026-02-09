@@ -35,13 +35,11 @@ async fn main() -> Result<()> {
 
     //
 
-    let options = SignalingClientOptions {
-        product_id: "wp-ooraxfzr".to_string(),
-        device_id: "wd-qpjx37pf9utuzwbq".to_string(),
-        access_token: None,
-        endpoint_url: None,
-        require_online: None,
-    };
+    let options = SignalingClientOptions::builder(
+        "wp-ooraxfzr".to_string(),
+        "wd-qpjx37pf9utuzwbq".to_string(),
+    )
+    .build();
 
     let (mut client, mut event_rx) = SignalingClient::new(options).await.unwrap();
 

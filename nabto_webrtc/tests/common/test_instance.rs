@@ -15,6 +15,9 @@ pub struct DeviceTestInstance {
     pub test_id: String,
     pub access_token: String,
     pub observed_states: Arc<std::sync::Mutex<Vec<SignalingConnectionState>>>,
+    /// Optional heartbeat interval override for the device WebSocket connection.
+    /// When None, uses the library default (30s).
+    pub heartbeat_interval: Option<Duration>,
     test_client: TestClient,
 }
 
@@ -96,6 +99,7 @@ impl DeviceTestInstance {
             test_id: response.test_id,
             access_token: response.access_token,
             observed_states: Arc::new(Mutex::new(Vec::new())),
+            heartbeat_interval: None,
             test_client,
         })
     }
@@ -122,12 +126,18 @@ impl DeviceTestInstance {
                 >
         });
 
-        SignalingDevice::new(SignalingDeviceOptions {
-            endpoint_url: Some(self.endpoint_url.clone()),
-            product_id: self.product_id.clone(),
-            device_id: self.device_id.clone(),
+        let mut builder = SignalingDeviceOptions::builder(
+            self.product_id.clone(),
+            self.device_id.clone(),
             token_generator,
-        })
+        )
+        .endpoint_url(self.endpoint_url.clone());
+
+        if let Some(interval) = self.heartbeat_interval {
+            builder = builder.heartbeat_interval(Some(interval));
+        }
+
+        SignalingDevice::new(builder.build())
     }
 
     /// Create and start a SignalingDevice, returning a handle to it

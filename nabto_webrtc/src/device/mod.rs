@@ -11,7 +11,7 @@ use crate::common::channel::{ChannelHandle, ChannelRequest, SignalingChannel, Si
 use crate::common::routing::error_codes;
 use crate::common::routing::ErrorInfo;
 use crate::common::routing::RoutingMessage;
-use crate::common::{ConnectionEvent, WebSocketConfig, WebSocketConnection, WebSocketHandle};
+use crate::common::{ConnectionEvent, WebSocketConnection, WebSocketHandle};
 use crate::common::{HttpApi, IceServer};
 use crate::common::{SignalingChannelState, SignalingConnectionState};
 use crate::{Error, Result};
@@ -86,16 +86,89 @@ impl std::fmt::Debug for DeviceEvent {
 /// Options for creating a SignalingDevice
 pub struct SignalingDeviceOptions {
     /// Optional URL for the signaling service
-    pub endpoint_url: Option<String>,
+    pub(crate) endpoint_url: Option<String>,
 
     /// The product ID (e.g., "wp-abcdefghi")
-    pub product_id: String,
+    pub(crate) product_id: String,
 
     /// The device ID (e.g., "wd-jklmnopqr")
-    pub device_id: String,
+    pub(crate) device_id: String,
 
     /// Token generator called when a new access token is needed
-    pub token_generator: TokenGenerator,
+    pub(crate) token_generator: TokenGenerator,
+
+    /// Interval between heartbeat PINGs, or None to disable heartbeat.
+    /// Defaults to 30 seconds.
+    pub(crate) heartbeat_interval: Option<Duration>,
+}
+
+/// Builder for [`SignalingDeviceOptions`].
+///
+/// # Example
+///
+/// ```no_run
+/// use nabto_webrtc::device::SignalingDeviceOptions;
+///
+/// # let token_generator: nabto_webrtc::device::TokenGenerator = Box::new(|| {
+/// #     Box::pin(async { Ok("token".to_string()) })
+/// #         as std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, nabto_webrtc::Error>> + Send>>
+/// # });
+/// let options = SignalingDeviceOptions::builder("wp-test".to_string(), "wd-test".to_string(), token_generator)
+///     .endpoint_url("https://custom.endpoint.net".to_string())
+///     .build();
+/// ```
+pub struct SignalingDeviceOptionsBuilder {
+    product_id: String,
+    device_id: String,
+    token_generator: TokenGenerator,
+    endpoint_url: Option<String>,
+    heartbeat_interval: Option<Duration>,
+}
+
+impl SignalingDeviceOptions {
+    /// Create a new builder for `SignalingDeviceOptions`.
+    pub fn builder(
+        product_id: String,
+        device_id: String,
+        token_generator: TokenGenerator,
+    ) -> SignalingDeviceOptionsBuilder {
+        SignalingDeviceOptionsBuilder {
+            product_id,
+            device_id,
+            token_generator,
+            endpoint_url: None,
+            heartbeat_interval: Some(Duration::from_secs(30)),
+        }
+    }
+}
+
+impl SignalingDeviceOptionsBuilder {
+    /// Set a custom endpoint URL for the signaling service.
+    ///
+    /// If not set, defaults to `https://<product_id>.webrtc.nabto.net`.
+    pub fn endpoint_url(mut self, url: String) -> Self {
+        self.endpoint_url = Some(url);
+        self
+    }
+
+    /// Set the heartbeat interval for WebSocket keepalive PINGs.
+    ///
+    /// Defaults to 30 seconds. Pass `None` to disable the heartbeat.
+    pub fn heartbeat_interval(mut self, interval: Option<Duration>) -> Self {
+        self.heartbeat_interval = interval;
+        self
+    }
+
+    /// Build the `SignalingDeviceOptions`.
+    pub fn build(self) -> SignalingDeviceOptions {
+        SignalingDeviceOptions {
+            endpoint_url: self.endpoint_url,
+            product_id: self.product_id,
+            device_id: self.device_id,
+            token_generator: self.token_generator,
+            heartbeat_interval: self.heartbeat_interval,
+        }
+    }
 }
 
 /// The main SignalingDevice interface
@@ -190,12 +263,11 @@ impl SignalingDevice {
     /// #     Box::pin(async { Ok("token".to_string()) })
     /// #         as std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, nabto_webrtc::Error>> + Send>>
     /// # });
-    /// # let options = SignalingDeviceOptions {
-    /// #     endpoint_url: None,
-    /// #     product_id: "wp-test".to_string(),
-    /// #     device_id: "wd-test".to_string(),
+    /// # let options = SignalingDeviceOptions::builder(
+    /// #     "wp-test".to_string(),
+    /// #     "wd-test".to_string(),
     /// #     token_generator,
-    /// # };
+    /// # ).build();
     /// let (mut device, event_rx, command_tx) = SignalingDevice::new(options);
     ///
     /// // Spawn the device run loop
@@ -515,8 +587,8 @@ impl SignalingDevice {
             .map_err(|e| Error::WebSocket(format!("Failed to connect WebSocket: {}", e)))?;
 
         // Step 3: Create WebSocketConnection and spawn it as a task
-        let config = WebSocketConfig::default();
-        let (connection, handle, event_rx) = WebSocketConnection::new(self.name, ws_stream, config);
+        let (connection, handle, event_rx) =
+            WebSocketConnection::new(self.name, ws_stream, self.options.heartbeat_interval);
 
         self.ws_handle = Some(handle);
         self.ws_event_rx = Some(event_rx);
@@ -556,8 +628,12 @@ impl SignalingDevice {
     /// websocket disconnects and a new signaling connection is made to the
     /// signaling service.
     pub async fn check_alive(&self) -> Result<()> {
+        const CHECK_ALIVE_TIMEOUT_MS: u64 = 2_000;
         if let Some(handle) = &self.ws_handle {
-            handle.send_ping().await.map_err(Error::WebSocket)?;
+            handle
+                .check_alive(CHECK_ALIVE_TIMEOUT_MS)
+                .await
+                .map_err(Error::WebSocket)?;
         }
         Ok(())
     }

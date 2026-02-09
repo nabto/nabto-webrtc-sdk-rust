@@ -1,13 +1,12 @@
 pub mod channel;
-pub mod connection;
 pub mod http;
 pub mod reliability;
 pub mod routing;
 pub mod websocket;
 
-pub use connection::{ConnectionEvent, WebSocketConfig, WebSocketConnection, WebSocketHandle};
 pub use http::{HttpApi, IceServer};
 pub use routing::{error_codes, ErrorInfo, RoutingMessage};
+pub use websocket::{ConnectionEvent, WebSocketConnection, WebSocketHandle};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SignalingConnectionState {
