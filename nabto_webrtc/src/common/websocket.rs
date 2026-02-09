@@ -163,9 +163,9 @@ impl WebSocketConnection {
         // Notify that connection is open
         let _ = self.event_tx.send(ConnectionEvent::Open).await;
 
-        let mut heartbeat_interval = self.heartbeat_interval.map(|interval| {
-            tokio::time::interval_at(Instant::now() + interval, interval)
-        });
+        let mut heartbeat_interval = self
+            .heartbeat_interval
+            .map(|interval| tokio::time::interval_at(Instant::now() + interval, interval));
 
         loop {
             // Calculate the timeout future - only active when check_alive is pending
@@ -422,8 +422,7 @@ mod tests {
             while let Some(Ok(msg)) = ws.next().await {
                 if let WsMessage::Text(text) = msg {
                     if let Ok(RoutingMessage::Ping) = serde_json::from_str(&text) {
-                        ping_count_clone
-                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        ping_count_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         let pong = serde_json::to_string(&RoutingMessage::Pong).unwrap();
                         if ws.send(WsMessage::Text(pong)).await.is_err() {
                             break;
@@ -456,7 +455,10 @@ mod tests {
 
         // Verify the server received multiple heartbeat PINGs
         let count = ping_count.load(std::sync::atomic::Ordering::Relaxed);
-        assert!(count >= 3, "Expected at least 3 heartbeat PINGs, got {count}");
+        assert!(
+            count >= 3,
+            "Expected at least 3 heartbeat PINGs, got {count}"
+        );
     }
 
     #[tokio::test]
@@ -491,8 +493,7 @@ mod tests {
             while let Some(Ok(msg)) = ws.next().await {
                 if let WsMessage::Text(text) = msg {
                     if let Ok(RoutingMessage::Ping) = serde_json::from_str(&text) {
-                        ping_count_clone
-                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        ping_count_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
                 }
             }
