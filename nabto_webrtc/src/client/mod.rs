@@ -5,7 +5,6 @@ use crate::common::channel::SignalingService;
 use crate::common::http::HttpApi;
 use crate::common::routing::RoutingMessage;
 use crate::common::websocket::ConnectionEvent;
-use crate::common::websocket::WebSocketConfig;
 use crate::common::websocket::WebSocketConnection;
 use crate::common::websocket::WebSocketHandle;
 use crate::common::SignalingChannelState;
@@ -330,8 +329,7 @@ impl SignalingClient {
             .await
             .map_err(|e| Error::WebSocket(format!("Failed to connect websocket: {}", e)))?;
 
-        let config = WebSocketConfig::default();
-        let (connection, handle, event_rx) = WebSocketConnection::new(self.name, ws_stream, config);
+        let (connection, handle, event_rx) = WebSocketConnection::new(self.name, ws_stream);
 
         self.service.ws_handle = Some(handle);
         self.service.ws_event_rx = Some(event_rx);

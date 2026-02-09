@@ -11,7 +11,7 @@ use crate::common::channel::{ChannelHandle, ChannelRequest, SignalingChannel, Si
 use crate::common::routing::error_codes;
 use crate::common::routing::ErrorInfo;
 use crate::common::routing::RoutingMessage;
-use crate::common::{ConnectionEvent, WebSocketConfig, WebSocketConnection, WebSocketHandle};
+use crate::common::{ConnectionEvent, WebSocketConnection, WebSocketHandle};
 use crate::common::{HttpApi, IceServer};
 use crate::common::{SignalingChannelState, SignalingConnectionState};
 use crate::{Error, Result};
@@ -572,8 +572,7 @@ impl SignalingDevice {
             .map_err(|e| Error::WebSocket(format!("Failed to connect WebSocket: {}", e)))?;
 
         // Step 3: Create WebSocketConnection and spawn it as a task
-        let config = WebSocketConfig::default();
-        let (connection, handle, event_rx) = WebSocketConnection::new(self.name, ws_stream, config);
+        let (connection, handle, event_rx) = WebSocketConnection::new(self.name, ws_stream);
 
         self.ws_handle = Some(handle);
         self.ws_event_rx = Some(event_rx);
@@ -613,8 +612,12 @@ impl SignalingDevice {
     /// websocket disconnects and a new signaling connection is made to the
     /// signaling service.
     pub async fn check_alive(&self) -> Result<()> {
+        const CHECK_ALIVE_TIMEOUT_MS: u64 = 2_000;
         if let Some(handle) = &self.ws_handle {
-            handle.send_ping().await.map_err(Error::WebSocket)?;
+            handle
+                .check_alive(CHECK_ALIVE_TIMEOUT_MS)
+                .await
+                .map_err(Error::WebSocket)?;
         }
         Ok(())
     }
