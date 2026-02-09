@@ -79,12 +79,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Create signaling device options
-    let options = SignalingDeviceOptions {
-        endpoint_url: args.endpoint, // Use custom endpoint if provided
-        product_id,
-        device_id,
-        token_generator,
-    };
+    let mut options_builder =
+        SignalingDeviceOptions::builder(product_id, device_id, token_generator);
+    if let Some(endpoint) = args.endpoint {
+        options_builder = options_builder.endpoint_url(endpoint);
+    }
+    let options = options_builder.build();
 
     // Create the signaling device
     let (device, _event_rx, _command_tx) = SignalingDevice::new(options);

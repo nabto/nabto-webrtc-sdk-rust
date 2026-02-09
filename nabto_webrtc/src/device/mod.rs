@@ -86,16 +86,74 @@ impl std::fmt::Debug for DeviceEvent {
 /// Options for creating a SignalingDevice
 pub struct SignalingDeviceOptions {
     /// Optional URL for the signaling service
-    pub endpoint_url: Option<String>,
+    pub(crate) endpoint_url: Option<String>,
 
     /// The product ID (e.g., "wp-abcdefghi")
-    pub product_id: String,
+    pub(crate) product_id: String,
 
     /// The device ID (e.g., "wd-jklmnopqr")
-    pub device_id: String,
+    pub(crate) device_id: String,
 
     /// Token generator called when a new access token is needed
-    pub token_generator: TokenGenerator,
+    pub(crate) token_generator: TokenGenerator,
+}
+
+/// Builder for [`SignalingDeviceOptions`].
+///
+/// # Example
+///
+/// ```no_run
+/// use nabto_webrtc::device::SignalingDeviceOptions;
+///
+/// # let token_generator: nabto_webrtc::device::TokenGenerator = Box::new(|| {
+/// #     Box::pin(async { Ok("token".to_string()) })
+/// #         as std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, nabto_webrtc::Error>> + Send>>
+/// # });
+/// let options = SignalingDeviceOptions::builder("wp-test".to_string(), "wd-test".to_string(), token_generator)
+///     .endpoint_url("https://custom.endpoint.net".to_string())
+///     .build();
+/// ```
+pub struct SignalingDeviceOptionsBuilder {
+    product_id: String,
+    device_id: String,
+    token_generator: TokenGenerator,
+    endpoint_url: Option<String>,
+}
+
+impl SignalingDeviceOptions {
+    /// Create a new builder for `SignalingDeviceOptions`.
+    pub fn builder(
+        product_id: String,
+        device_id: String,
+        token_generator: TokenGenerator,
+    ) -> SignalingDeviceOptionsBuilder {
+        SignalingDeviceOptionsBuilder {
+            product_id,
+            device_id,
+            token_generator,
+            endpoint_url: None,
+        }
+    }
+}
+
+impl SignalingDeviceOptionsBuilder {
+    /// Set a custom endpoint URL for the signaling service.
+    ///
+    /// If not set, defaults to `https://<product_id>.webrtc.nabto.net`.
+    pub fn endpoint_url(mut self, url: String) -> Self {
+        self.endpoint_url = Some(url);
+        self
+    }
+
+    /// Build the `SignalingDeviceOptions`.
+    pub fn build(self) -> SignalingDeviceOptions {
+        SignalingDeviceOptions {
+            endpoint_url: self.endpoint_url,
+            product_id: self.product_id,
+            device_id: self.device_id,
+            token_generator: self.token_generator,
+        }
+    }
 }
 
 /// The main SignalingDevice interface
@@ -190,12 +248,11 @@ impl SignalingDevice {
     /// #     Box::pin(async { Ok("token".to_string()) })
     /// #         as std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, nabto_webrtc::Error>> + Send>>
     /// # });
-    /// # let options = SignalingDeviceOptions {
-    /// #     endpoint_url: None,
-    /// #     product_id: "wp-test".to_string(),
-    /// #     device_id: "wd-test".to_string(),
+    /// # let options = SignalingDeviceOptions::builder(
+    /// #     "wp-test".to_string(),
+    /// #     "wd-test".to_string(),
     /// #     token_generator,
-    /// # };
+    /// # ).build();
     /// let (mut device, event_rx, command_tx) = SignalingDevice::new(options);
     ///
     /// // Spawn the device run loop

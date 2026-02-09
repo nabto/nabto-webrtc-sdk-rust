@@ -122,12 +122,15 @@ impl DeviceTestInstance {
                 >
         });
 
-        SignalingDevice::new(SignalingDeviceOptions {
-            endpoint_url: Some(self.endpoint_url.clone()),
-            product_id: self.product_id.clone(),
-            device_id: self.device_id.clone(),
-            token_generator,
-        })
+        SignalingDevice::new(
+            SignalingDeviceOptions::builder(
+                self.product_id.clone(),
+                self.device_id.clone(),
+                token_generator,
+            )
+            .endpoint_url(self.endpoint_url.clone())
+            .build(),
+        )
     }
 
     /// Create and start a SignalingDevice, returning a handle to it

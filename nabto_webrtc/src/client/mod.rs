@@ -27,11 +27,78 @@ pub enum SignalingClientEvent {
 }
 
 pub struct SignalingClientOptions {
-    pub product_id: String,
-    pub device_id: String,
-    pub require_online: Option<bool>,
-    pub endpoint_url: Option<String>,
-    pub access_token: Option<String>,
+    pub(crate) product_id: String,
+    pub(crate) device_id: String,
+    pub(crate) require_online: Option<bool>,
+    pub(crate) endpoint_url: Option<String>,
+    pub(crate) access_token: Option<String>,
+}
+
+/// Builder for [`SignalingClientOptions`].
+///
+/// # Example
+///
+/// ```no_run
+/// use nabto_webrtc::client::SignalingClientOptions;
+///
+/// let options = SignalingClientOptions::builder("wp-test".to_string(), "wd-test".to_string())
+///     .endpoint_url("https://custom.endpoint.net".to_string())
+///     .require_online(true)
+///     .access_token("my-token".to_string())
+///     .build();
+/// ```
+pub struct SignalingClientOptionsBuilder {
+    product_id: String,
+    device_id: String,
+    endpoint_url: Option<String>,
+    require_online: Option<bool>,
+    access_token: Option<String>,
+}
+
+impl SignalingClientOptions {
+    /// Create a new builder for `SignalingClientOptions`.
+    pub fn builder(product_id: String, device_id: String) -> SignalingClientOptionsBuilder {
+        SignalingClientOptionsBuilder {
+            product_id,
+            device_id,
+            endpoint_url: None,
+            require_online: None,
+            access_token: None,
+        }
+    }
+}
+
+impl SignalingClientOptionsBuilder {
+    /// Set a custom endpoint URL for the signaling service.
+    ///
+    /// If not set, defaults to `https://<product_id>.webrtc.nabto.net`.
+    pub fn endpoint_url(mut self, url: String) -> Self {
+        self.endpoint_url = Some(url);
+        self
+    }
+
+    /// Set whether the device must be online.
+    pub fn require_online(mut self, val: bool) -> Self {
+        self.require_online = Some(val);
+        self
+    }
+
+    /// Set an access token for authentication.
+    pub fn access_token(mut self, token: String) -> Self {
+        self.access_token = Some(token);
+        self
+    }
+
+    /// Build the `SignalingClientOptions`.
+    pub fn build(self) -> SignalingClientOptions {
+        SignalingClientOptions {
+            product_id: self.product_id,
+            device_id: self.device_id,
+            endpoint_url: self.endpoint_url,
+            require_online: self.require_online,
+            access_token: self.access_token,
+        }
+    }
 }
 
 pub struct SignalingClientService {
