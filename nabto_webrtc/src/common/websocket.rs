@@ -78,6 +78,9 @@ pub struct WebSocketConnection {
 
     /// Pong counter stored at the last heartbeat ping, used to verify liveness
     heartbeat_pong_counter: Option<u64>,
+
+    /// Interval between heartbeat PINGs, or None to disable heartbeat
+    heartbeat_interval: Option<Duration>,
 }
 
 /// Commands that can be sent to the WebSocket connection
@@ -132,6 +135,7 @@ impl WebSocketConnection {
     pub fn new(
         name: &'static str,
         ws_stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
+        heartbeat_interval: Option<Duration>,
     ) -> (Self, WebSocketHandle, mpsc::Receiver<ConnectionEvent>) {
         let (event_tx, event_rx) = mpsc::channel(128);
         let (command_tx, command_rx) = mpsc::channel(32);
@@ -144,6 +148,7 @@ impl WebSocketConnection {
             pong_counter: 0,
             check_alive_state: None,
             heartbeat_pong_counter: None,
+            heartbeat_interval,
         };
 
         let handle = WebSocketHandle { command_tx };
@@ -155,13 +160,12 @@ impl WebSocketConnection {
     ///
     /// This should be spawned as a task: `tokio::spawn(connection.run())`
     pub async fn run(mut self) {
-        const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
-
         // Notify that connection is open
         let _ = self.event_tx.send(ConnectionEvent::Open).await;
 
-        let mut heartbeat_interval =
-            tokio::time::interval_at(Instant::now() + HEARTBEAT_INTERVAL, HEARTBEAT_INTERVAL);
+        let mut heartbeat_interval = self.heartbeat_interval.map(|interval| {
+            tokio::time::interval_at(Instant::now() + interval, interval)
+        });
 
         loop {
             // Calculate the timeout future - only active when check_alive is pending
@@ -212,7 +216,12 @@ impl WebSocketConnection {
                 }
 
                 // Heartbeat: periodically send PING and check for PONG
-                _ = heartbeat_interval.tick() => {
+                _ = async {
+                    match heartbeat_interval.as_mut() {
+                        Some(interval) => interval.tick().await,
+                        None => { std::future::pending::<tokio::time::Instant>().await }
+                    }
+                } => {
                     if let Some(last_pong_counter) = self.heartbeat_pong_counter {
                         if self.pong_counter <= last_pong_counter {
                             warn!("[{}] Heartbeat timeout - no PONG received since last heartbeat", self.name);
@@ -365,5 +374,142 @@ impl WebSocketConnection {
             .map_err(|e| format!("Failed to send WebSocket message: {}", e))?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::net::TcpListener;
+
+    /// Helper: start a local WebSocket server and return the address.
+    /// `handler` is called with the accepted server-side WebSocket stream.
+    async fn start_ws_server<F, Fut>(handler: F) -> std::net::SocketAddr
+    where
+        F: FnOnce(WebSocketStream<TcpStream>) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = ()> + Send,
+    {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            handler(ws).await;
+        });
+        addr
+    }
+
+    /// Connect to a local WebSocket server and create a WebSocketConnection.
+    async fn connect(
+        addr: std::net::SocketAddr,
+        heartbeat_interval: Option<Duration>,
+    ) -> (WebSocketHandle, mpsc::Receiver<ConnectionEvent>) {
+        let url = format!("ws://127.0.0.1:{}", addr.port());
+        let (ws_stream, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+        let (connection, handle, event_rx) =
+            WebSocketConnection::new("test", ws_stream, heartbeat_interval);
+        tokio::spawn(connection.run());
+        (handle, event_rx)
+    }
+
+    #[tokio::test]
+    async fn test_heartbeat_succeeds_when_pongs_received() {
+        let ping_count = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let ping_count_clone = ping_count.clone();
+
+        let addr = start_ws_server(move |mut ws| async move {
+            // Respond to every PING with a PONG
+            while let Some(Ok(msg)) = ws.next().await {
+                if let WsMessage::Text(text) = msg {
+                    if let Ok(RoutingMessage::Ping) = serde_json::from_str(&text) {
+                        ping_count_clone
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let pong = serde_json::to_string(&RoutingMessage::Pong).unwrap();
+                        if ws.send(WsMessage::Text(pong)).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        })
+        .await;
+
+        let (handle, mut event_rx) = connect(addr, Some(Duration::from_millis(100))).await;
+
+        // Consume the Open event
+        let event = event_rx.recv().await.unwrap();
+        assert!(matches!(event, ConnectionEvent::Open));
+
+        // Wait long enough for several heartbeat cycles
+        tokio::time::sleep(Duration::from_millis(350)).await;
+
+        // Close cleanly
+        handle.close().await.unwrap();
+
+        // Drain remaining events — should get Closed, never PingTimeout
+        while let Some(event) = event_rx.recv().await {
+            assert!(
+                !matches!(event, ConnectionEvent::PingTimeout),
+                "Should not get PingTimeout when server responds to PINGs"
+            );
+        }
+
+        // Verify the server received multiple heartbeat PINGs
+        let count = ping_count.load(std::sync::atomic::Ordering::Relaxed);
+        assert!(count >= 3, "Expected at least 3 heartbeat PINGs, got {count}");
+    }
+
+    #[tokio::test]
+    async fn test_heartbeat_timeout_when_no_pong() {
+        let addr = start_ws_server(|mut ws| async move {
+            // Read messages but never respond — let the heartbeat time out
+            while let Some(Ok(_)) = ws.next().await {}
+        })
+        .await;
+
+        let (_handle, mut event_rx) = connect(addr, Some(Duration::from_millis(100))).await;
+
+        // Consume the Open event
+        let event = event_rx.recv().await.unwrap();
+        assert!(matches!(event, ConnectionEvent::Open));
+
+        // The first heartbeat tick sends a PING (at +100ms).
+        // The second tick (at +200ms) detects no PONG and emits PingTimeout.
+        let event = tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
+            .await
+            .expect("Should receive PingTimeout within 1s")
+            .expect("Channel should not be closed");
+        assert!(matches!(event, ConnectionEvent::PingTimeout));
+    }
+
+    #[tokio::test]
+    async fn test_no_heartbeat_when_disabled() {
+        let ping_count = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let ping_count_clone = ping_count.clone();
+
+        let addr = start_ws_server(move |mut ws| async move {
+            while let Some(Ok(msg)) = ws.next().await {
+                if let WsMessage::Text(text) = msg {
+                    if let Ok(RoutingMessage::Ping) = serde_json::from_str(&text) {
+                        ping_count_clone
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+            }
+        })
+        .await;
+
+        let (handle, mut event_rx) = connect(addr, None).await;
+
+        let event = event_rx.recv().await.unwrap();
+        assert!(matches!(event, ConnectionEvent::Open));
+
+        // Wait — no heartbeat PINGs should be sent
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        handle.close().await.unwrap();
+
+        let count = ping_count.load(std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(count, 0, "No heartbeat PINGs should be sent when disabled");
     }
 }

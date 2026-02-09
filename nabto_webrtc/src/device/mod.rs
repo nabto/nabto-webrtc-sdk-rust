@@ -572,7 +572,8 @@ impl SignalingDevice {
             .map_err(|e| Error::WebSocket(format!("Failed to connect WebSocket: {}", e)))?;
 
         // Step 3: Create WebSocketConnection and spawn it as a task
-        let (connection, handle, event_rx) = WebSocketConnection::new(self.name, ws_stream);
+        let (connection, handle, event_rx) =
+            WebSocketConnection::new(self.name, ws_stream, Some(Duration::from_secs(30)));
 
         self.ws_handle = Some(handle);
         self.ws_event_rx = Some(event_rx);
