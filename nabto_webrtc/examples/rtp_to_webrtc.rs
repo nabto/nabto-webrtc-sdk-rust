@@ -21,7 +21,6 @@ use anyhow::Result;
 use clap::Parser;
 use log::{debug, error, info, warn};
 use nabto_webrtc::common::channel::ChannelHandle;
-use nabto_webrtc::common::HttpApi;
 use nabto_webrtc::device::{DeviceTokenGenerator, SignalingDevice, SignalingDeviceOptions};
 use nabto_webrtc::util::{
     DeviceMessageTransport, DeviceMessageTransportOptions, MessageTransportEvent, SecurityMode,
@@ -29,8 +28,6 @@ use nabto_webrtc::util::{
 };
 use serde_json::Value as JsonValue;
 use std::fs;
-use std::future::Future;
-use std::pin::Pin;
 use std::process;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
@@ -501,12 +498,14 @@ async fn main() -> Result<()> {
     println!("Created VP8 video track");
     println!();
 
-    // Clone values for use in closure
+    // Clone values for use in closures and later URL printing
     let product_id_for_token = product_id.clone();
     let device_id_for_token = device_id.clone();
+    let product_id_for_url = product_id.clone();
+    let device_id_for_url = device_id.clone();
 
     // Create a token generator that uses the private key
-    let token_generator = Box::new(move || {
+    let token_generator: nabto_webrtc::device::TokenGenerator = Arc::new(move || {
         let generator = DeviceTokenGenerator::new(
             product_id_for_token.clone(),
             device_id_for_token.clone(),
@@ -516,13 +515,8 @@ async fn main() -> Result<()> {
         Box::pin(async move {
             // Generate JWT token with the private key
             generator.generate_token()
-        }) as Pin<Box<dyn Future<Output = Result<String, nabto_webrtc::Error>> + Send>>
+        }) as std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, nabto_webrtc::Error>> + Send>>
     });
-
-    // Clone for later use in URL printing and ICE server provider
-    let product_id_for_url = product_id.clone();
-    let device_id_for_url = device_id.clone();
-    let endpoint_url_opt = args.endpoint.clone();
 
     // Create signaling device options
     let mut options_builder =
@@ -539,74 +533,8 @@ async fn main() -> Result<()> {
     println!("Connection state: {:?}", device.connection_state());
     println!();
 
-    // Create an ICE server provider that uses HTTP API directly
-    // This avoids the deadlock by not requiring the device lock
-    let endpoint_url = endpoint_url_opt
-        .unwrap_or_else(|| format!("https://{}.webrtc.nabto.net", product_id_for_url));
-
-    // Clone values needed for ICE server provider
-    let product_id_for_ice = product_id_for_url.clone();
-    let device_id_for_ice = device_id_for_url.clone();
-    let endpoint_url_for_ice = endpoint_url.clone();
-
-    // Clone the private key for the ICE server token generator
-    let private_key_for_ice = fs::read_to_string(&private_key_file)?;
-
-    let ice_server_provider_fn = Arc::new(move || {
-        let product_id = product_id_for_ice.clone();
-        let device_id = device_id_for_ice.clone();
-        let endpoint_url = endpoint_url_for_ice.clone();
-        let private_key = private_key_for_ice.clone();
-
-        Box::pin(async move {
-            // Create HTTP API client
-            let http_api = HttpApi::new(endpoint_url, product_id.clone(), device_id.clone());
-
-            // Generate token
-            let token_gen = DeviceTokenGenerator::new(product_id, device_id, private_key);
-            let token = token_gen.generate_token().map_err(|e| {
-                nabto_webrtc::Error::Other(format!("Token generation failed: {}", e))
-            })?;
-
-            // Request ICE servers
-            let http_servers = http_api.request_ice_servers(&token).await?;
-
-            // Convert to signaling protocol format
-            let ice_servers = http_servers
-                .into_iter()
-                .map(|s| nabto_webrtc::util::IceServer {
-                    urls: s.urls,
-                    username: s.username,
-                    credential: s.credential,
-                })
-                .collect();
-
-            Ok(ice_servers)
-        })
-            as Pin<
-                Box<
-                    dyn Future<
-                            Output = Result<
-                                Vec<nabto_webrtc::util::IceServer>,
-                                nabto_webrtc::Error,
-                            >,
-                        > + Send,
-                >,
-            >
-    })
-        as Arc<
-            dyn Fn() -> Pin<
-                    Box<
-                        dyn Future<
-                                Output = Result<
-                                    Vec<nabto_webrtc::util::IceServer>,
-                                    nabto_webrtc::Error,
-                                >,
-                            > + Send,
-                    >,
-                > + Send
-                + Sync,
-        >;
+    // Create an ICE server requester before wrapping device in Mutex
+    let ice_server_requester = device.ice_server_requester();
 
     // Wrap device in Arc<Mutex> only for the run loop
     let device = Arc::new(Mutex::new(device));
@@ -648,7 +576,7 @@ async fn main() -> Result<()> {
                     let api_clone = api_for_task.clone();
                     let video_track_clone = Arc::clone(&video_track_for_task);
                     let shared_secret_clone = shared_secret_for_task.clone();
-                    let ice_server_provider_clone = Arc::clone(&ice_server_provider_fn);
+                    let ice_server_requester_clone = ice_server_requester.clone();
 
                     tokio::spawn(async move {
                         // Create message transport with security mode
@@ -660,12 +588,9 @@ async fn main() -> Result<()> {
                             SecurityMode::None
                         };
 
-                        // Use the pre-created ICE server provider (no device lock needed!)
-                        let ice_server_provider = Some(ice_server_provider_clone);
-
                         let transport_options = DeviceMessageTransportOptions {
                             security_mode,
-                            ice_server_provider,
+                            ice_server_requester: Some(ice_server_requester_clone),
                         };
 
                         // Create RTC connection handler with the transport

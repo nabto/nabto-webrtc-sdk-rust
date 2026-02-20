@@ -6,6 +6,7 @@
 //! - DESCRIPTION: WebRTC SDP descriptions (offer/answer)
 //! - CANDIDATE: WebRTC ICE candidates
 
+use crate::common::http::IceServer as HttpIceServer;
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -39,6 +40,16 @@ pub struct IceServer {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub credential: Option<String>,
     pub urls: Vec<String>,
+}
+
+impl From<HttpIceServer> for IceServer {
+    fn from(s: HttpIceServer) -> Self {
+        Self {
+            urls: s.urls,
+            username: s.username,
+            credential: s.credential,
+        }
+    }
 }
 
 /// WebRTC session description

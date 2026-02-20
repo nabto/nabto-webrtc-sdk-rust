@@ -115,7 +115,7 @@ impl DeviceTestInstance {
     ) {
         let access_token = self.access_token.clone();
 
-        let token_generator = Box::new(move || {
+        let token_generator: nabto_webrtc::device::TokenGenerator = std::sync::Arc::new(move || {
             let token = access_token.clone();
             Box::pin(async move { Ok(token) })
                 as std::pin::Pin<

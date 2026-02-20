@@ -8,6 +8,7 @@ use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 
 /// HTTP client for the Nabto WebRTC Signaling Service
+#[derive(Clone)]
 pub struct HttpApi {
     endpoint_url: String,
     product_id: String,

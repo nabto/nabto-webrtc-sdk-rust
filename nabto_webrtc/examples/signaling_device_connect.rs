@@ -13,6 +13,7 @@ use clap::Parser;
 use nabto_webrtc::device::{DeviceTokenGenerator, SignalingDevice, SignalingDeviceOptions};
 use std::fs;
 use std::future::Future;
+use std::sync::Arc;
 use std::pin::Pin;
 use std::process;
 
@@ -70,7 +71,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let device_id_for_token = device_id.clone();
 
     // Create a token generator that uses the private key
-    let token_generator = Box::new(move || {
+    let token_generator: nabto_webrtc::device::TokenGenerator = Arc::new(move || {
         let generator = DeviceTokenGenerator::new(
             product_id_for_token.clone(),
             device_id_for_token.clone(),

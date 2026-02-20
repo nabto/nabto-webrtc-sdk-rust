@@ -12,7 +12,7 @@ mod signing;
 // Re-export public types
 pub use client_message_transport::{ClientMessageTransport, ClientSecurityMode};
 pub use device_message_transport::{
-    DeviceMessageTransport, DeviceMessageTransportOptions, IceServerProvider, SecurityMode,
+    DeviceMessageTransport, DeviceMessageTransportOptions, SecurityMode,
 };
 pub use message_encoder::{
     IceCandidate, IceServer, MessageEncoder, SessionDescription, SignalingMessage,
