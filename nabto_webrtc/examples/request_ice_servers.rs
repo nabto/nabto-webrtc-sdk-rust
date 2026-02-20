@@ -15,6 +15,7 @@ use std::fs;
 use std::future::Future;
 use std::pin::Pin;
 use std::process;
+use std::sync::Arc;
 
 /// Request ICE servers from the Nabto WebRTC Signaling Service
 #[derive(Parser, Debug)]
@@ -65,7 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let device_id_for_token = device_id.clone();
 
     // Create a token generator that uses the private key
-    let token_generator = Box::new(move || {
+    let token_generator: nabto_webrtc::device::TokenGenerator = Arc::new(move || {
         let generator = DeviceTokenGenerator::new(
             product_id_for_token.clone(),
             device_id_for_token.clone(),

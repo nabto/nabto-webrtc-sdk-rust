@@ -14,12 +14,14 @@ use crate::common::routing::RoutingMessage;
 use crate::common::{ConnectionEvent, WebSocketConnection, WebSocketHandle};
 use crate::common::{HttpApi, IceServer};
 use crate::common::{SignalingChannelState, SignalingConnectionState};
+use crate::util::IceServer as SignalingIceServer;
 use crate::{Error, Result};
 use log::{debug, error, info, trace, warn};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
@@ -33,7 +35,27 @@ const MAX_RECONNECT_WAIT_SECONDS: u32 = 60;
 
 /// Callback type for generating access tokens
 pub type TokenGenerator =
-    Box<dyn Fn() -> Pin<Box<dyn Future<Output = Result<String>> + Send>> + Send + Sync>;
+    Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<String>> + Send>> + Send + Sync>;
+
+/// A Clone-able handle for requesting ICE servers from the signaling service.
+///
+/// Obtain one by calling [`SignalingDevice::ice_server_requester`] before
+/// starting the device run loop. It can then be passed into
+/// [`DeviceMessageTransportOptions`](crate::util::DeviceMessageTransportOptions).
+#[derive(Clone)]
+pub struct IceServerRequester {
+    http_api: HttpApi,
+    token_generator: TokenGenerator,
+}
+
+impl IceServerRequester {
+    /// Request ICE servers from the signaling service.
+    pub async fn request_ice_servers(&self) -> Result<Vec<SignalingIceServer>> {
+        let token = (self.token_generator)().await?;
+        let servers = self.http_api.request_ice_servers(&token).await?;
+        Ok(servers.into_iter().map(Into::into).collect())
+    }
+}
 
 /// Commands that can be sent to the SignalingDevice
 pub enum DeviceCommand {
@@ -109,7 +131,7 @@ pub struct SignalingDeviceOptions {
 /// ```no_run
 /// use nabto_webrtc::device::SignalingDeviceOptions;
 ///
-/// # let token_generator: nabto_webrtc::device::TokenGenerator = Box::new(|| {
+/// # let token_generator: nabto_webrtc::device::TokenGenerator = std::sync::Arc::new(|| {
 /// #     Box::pin(async { Ok("token".to_string()) })
 /// #         as std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, nabto_webrtc::Error>> + Send>>
 /// # });
@@ -259,7 +281,7 @@ impl SignalingDevice {
     /// # use nabto_webrtc::device::{SignalingDevice, SignalingDeviceOptions};
     /// # #[tokio::main]
     /// # async fn main() {
-    /// # let token_generator = Box::new(|| {
+    /// # let token_generator: nabto_webrtc::device::TokenGenerator = std::sync::Arc::new(|| {
     /// #     Box::pin(async { Ok("token".to_string()) })
     /// #         as std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, nabto_webrtc::Error>> + Send>>
     /// # });
@@ -619,6 +641,18 @@ impl SignalingDevice {
     pub async fn request_ice_servers(&self) -> Result<Vec<IceServer>> {
         let token = (self.options.token_generator)().await?;
         self.http_api.request_ice_servers(&token).await
+    }
+
+    /// Create an [`IceServerRequester`] that can independently request ICE servers.
+    ///
+    /// Call this before wrapping the device in `Arc<Mutex<>>` and starting
+    /// the run loop, then pass the requester into
+    /// [`DeviceMessageTransportOptions`](crate::util::DeviceMessageTransportOptions).
+    pub fn ice_server_requester(&self) -> IceServerRequester {
+        IceServerRequester {
+            http_api: self.http_api.clone(),
+            token_generator: self.options.token_generator.clone(),
+        }
     }
 
     /// The check alive function is used to send a PING on the websocket. This

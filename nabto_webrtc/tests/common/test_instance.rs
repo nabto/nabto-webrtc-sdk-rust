@@ -115,16 +115,17 @@ impl DeviceTestInstance {
     ) {
         let access_token = self.access_token.clone();
 
-        let token_generator = Box::new(move || {
-            let token = access_token.clone();
-            Box::pin(async move { Ok(token) })
-                as std::pin::Pin<
-                    Box<
-                        dyn std::future::Future<Output = Result<String, nabto_webrtc::Error>>
-                            + Send,
-                    >,
-                >
-        });
+        let token_generator: nabto_webrtc::device::TokenGenerator =
+            std::sync::Arc::new(move || {
+                let token = access_token.clone();
+                Box::pin(async move { Ok(token) })
+                    as std::pin::Pin<
+                        Box<
+                            dyn std::future::Future<Output = Result<String, nabto_webrtc::Error>>
+                                + Send,
+                        >,
+                    >
+            });
 
         let mut builder = SignalingDeviceOptions::builder(
             self.product_id.clone(),

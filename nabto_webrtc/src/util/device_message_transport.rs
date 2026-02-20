@@ -12,11 +12,10 @@ use super::message_transport::{MessageTransportEvent, MessageTransportMode, Stat
 use super::signing::{JwtMessageSigner, MessageSigner, NoneMessageSigner};
 use crate::common::channel::ChannelHandle;
 use crate::common::routing::ErrorInfo;
+use crate::device::IceServerRequester;
 use crate::{Error, Result};
 use log::warn;
 use serde_json::Value as JsonValue;
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
@@ -32,16 +31,12 @@ pub enum SecurityMode {
     },
 }
 
-/// Callback type for requesting ICE servers
-pub type IceServerProvider =
-    Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<Vec<IceServer>>> + Send>> + Send + Sync>;
-
 /// Device message transport options
 #[derive(Clone)]
 pub struct DeviceMessageTransportOptions {
     pub security_mode: SecurityMode,
-    /// Optional callback to request ICE servers from the signaling service
-    pub ice_server_provider: Option<IceServerProvider>,
+    /// Optional ICE server requester obtained from [`SignalingDevice::ice_server_requester`](crate::device::SignalingDevice::ice_server_requester)
+    pub ice_server_requester: Option<IceServerRequester>,
 }
 
 /// Device message transport implementation
@@ -147,9 +142,9 @@ impl DeviceMessageTransport {
 
     /// Handle device setup request
     async fn handle_device_setup_request(&self) -> Result<()> {
-        // Request ICE servers from the signaling service if provider is available
-        let ice_servers = if let Some(ref provider) = self.options.ice_server_provider {
-            match provider().await {
+        // Request ICE servers from the signaling service if requester is available
+        let ice_servers = if let Some(ref requester) = self.options.ice_server_requester {
+            match requester.request_ice_servers().await {
                 Ok(servers) => Some(servers),
                 Err(e) => {
                     warn!("Failed to request ICE servers: {:?}", e);
@@ -352,7 +347,7 @@ mod tests {
 
         let options = DeviceMessageTransportOptions {
             security_mode: SecurityMode::None,
-            ice_server_provider: None,
+            ice_server_requester: None,
         };
         let transport = DeviceMessageTransport::new(handle, msg_rx, options);
 
