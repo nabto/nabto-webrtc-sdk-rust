@@ -515,7 +515,10 @@ async fn main() -> Result<()> {
         Box::pin(async move {
             // Generate JWT token with the private key
             generator.generate_token()
-        }) as std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, nabto_webrtc::Error>> + Send>>
+        })
+            as std::pin::Pin<
+                Box<dyn std::future::Future<Output = Result<String, nabto_webrtc::Error>> + Send>,
+            >
     });
 
     // Create signaling device options

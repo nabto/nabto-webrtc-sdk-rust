@@ -13,9 +13,9 @@ use clap::Parser;
 use nabto_webrtc::device::{DeviceTokenGenerator, SignalingDevice, SignalingDeviceOptions};
 use std::fs;
 use std::future::Future;
-use std::sync::Arc;
 use std::pin::Pin;
 use std::process;
+use std::sync::Arc;
 
 /// Start a signaling device and connect to the Nabto WebRTC Signaling Service
 #[derive(Parser, Debug)]
