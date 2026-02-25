@@ -2,9 +2,16 @@ name: CI
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches:
+      - '**'  # All branches
   pull_request:
-    branches: [ "main", "master" ]
+    branches:
+      - '**'  # PRs targeting any branch
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
 
 env:
   CARGO_TERM_COLOR: always
