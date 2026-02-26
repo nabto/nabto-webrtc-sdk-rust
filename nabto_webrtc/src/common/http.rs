@@ -5,6 +5,7 @@
 #![allow(dead_code)]
 
 use crate::{Error, Result};
+use log::debug;
 use serde::{Deserialize, Serialize};
 
 /// HTTP client for the Nabto WebRTC Signaling Service
@@ -120,9 +121,11 @@ impl HttpApi {
             request = request.header("Authorization", format!("Bearer {}", token));
         }
 
+        debug!("Sending POST {}", url);
         let response = request.send().await.map_err(|e| {
             Error::Connection(format!("Failed to send client connect request: {}", e))
         })?;
+        debug!("Received {} from POST {}", response.status(), url);
 
         self.handle_response(response).await
     }
@@ -139,6 +142,7 @@ impl HttpApi {
             product_id: self.product_id.clone(),
         };
 
+        debug!("Sending POST {}", url);
         let response = self
             .client
             .post(&url)
@@ -150,6 +154,7 @@ impl HttpApi {
             .map_err(|e| {
                 Error::Connection(format!("Failed to send device connect request: {}", e))
             })?;
+        debug!("Received {} from POST {}", response.status(), url);
 
         self.handle_response(response).await
     }
@@ -166,6 +171,7 @@ impl HttpApi {
             product_id: self.product_id.clone(),
         };
 
+        debug!("Sending POST {}", url);
         let response = self
             .client
             .post(&url)
@@ -175,6 +181,7 @@ impl HttpApi {
             .send()
             .await
             .map_err(|e| Error::Connection(format!("Failed to send ICE servers request: {}", e)))?;
+        debug!("Received {} from POST {}", response.status(), url);
 
         let ice_response: IceServersResponse = self.handle_response(response).await?;
         Ok(ice_response.ice_servers)

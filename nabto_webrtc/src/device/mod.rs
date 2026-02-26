@@ -3,19 +3,21 @@
 //! This module contains the core device-side WebRTC signaling implementation,
 //! including connection management, channel handling, and protocol layers.
 
+mod channel_actor;
 mod token;
 
 pub use token::DeviceTokenGenerator;
 
-use crate::common::channel::{ChannelHandle, ChannelRequest, SignalingChannel, SignalingService};
+use crate::common::channel::{ChannelHandle, ChannelRequest, SignalingChannel};
 use crate::common::routing::error_codes;
 use crate::common::routing::ErrorInfo;
 use crate::common::routing::RoutingMessage;
+use crate::common::SignalingConnectionState;
 use crate::common::{ConnectionEvent, WebSocketConnection, WebSocketHandle};
 use crate::common::{HttpApi, IceServer};
-use crate::common::{SignalingChannelState, SignalingConnectionState};
 use crate::util::IceServer as SignalingIceServer;
 use crate::{Error, Result};
+use channel_actor::{run_channel_actor, ChannelActorMessage, ChannelActorParams};
 use log::{debug, error, info, trace, warn};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -212,8 +214,8 @@ pub struct SignalingDevice {
     ws_handle: Option<WebSocketHandle>,
     ws_event_rx: Option<mpsc::Receiver<ConnectionEvent>>,
 
-    // Channel management
-    channels: HashMap<String, SignalingChannel>,
+    // Channel management — per-channel actor tasks
+    channel_actors: HashMap<String, mpsc::Sender<ChannelActorMessage>>,
     channel_request_tx: mpsc::Sender<ChannelRequest>,
     channel_request_rx: Option<mpsc::Receiver<ChannelRequest>>,
 
@@ -260,7 +262,7 @@ impl SignalingDevice {
             command_rx: Some(command_rx),
             ws_handle: None,
             ws_event_rx: None,
-            channels: HashMap::new(),
+            channel_actors: HashMap::new(),
             channel_request_tx,
             channel_request_rx: Some(channel_request_rx),
             reconnect_counter: 0,
@@ -472,26 +474,45 @@ impl SignalingDevice {
         self.ws_handle = None;
         self.ws_event_rx = None;
 
+        // Notify all channel actors that the connection is lost
+        for tx in self.channel_actors.values() {
+            let _ = tx.try_send(ChannelActorMessage::ConnectionLost);
+        }
+
         // Transition to WaitRetry
         self.set_state(SignalingConnectionState::WaitRetry);
     }
 
-    /// Retransmit unacked messages for all channels after reconnection
+    /// Send new WebSocket handle to all channel actors for retransmission
     async fn retransmit_unacked_messages(&mut self) {
-        let channel_ids: Vec<String> = self.channels.keys().cloned().collect();
+        let ws_handle = match &self.ws_handle {
+            Some(handle) => handle.clone(),
+            None => return,
+        };
 
         debug!(
-            "[{}] Retransmitting unacked messages for {} channels",
+            "[{}] Sending WebSocketReconnected to {} channel actors",
             self.name,
-            channel_ids.len()
+            self.channel_actors.len()
         );
 
-        for channel_id in channel_ids {
-            debug!("[{}] Retransmitting for channel: {}", self.name, channel_id);
-            if let Some(mut channel) = self.channels.remove(&channel_id) {
-                channel.handle_websocket_reconnect(self).await;
-                self.channels.insert(channel_id, channel);
+        let mut dead_actors = Vec::new();
+        for (channel_id, tx) in &self.channel_actors {
+            if tx
+                .send(ChannelActorMessage::WebSocketReconnected(ws_handle.clone()))
+                .await
+                .is_err()
+            {
+                debug!(
+                    "[{}] Channel actor {} is no longer running",
+                    self.name, channel_id
+                );
+                dead_actors.push(channel_id.clone());
             }
+        }
+
+        for channel_id in dead_actors {
+            self.channel_actors.remove(&channel_id);
         }
 
         debug!("[{}] Retransmission complete", self.name);
@@ -526,50 +547,36 @@ impl SignalingDevice {
                 code,
                 message,
             } => {
-                self.handle_channel_error(channel_id, code, message);
+                self.handle_channel_error(channel_id, code, message).await;
             }
             ConnectionEvent::PeerConnected { channel_id } => {
                 self.handle_peer_connected(channel_id).await;
             }
             ConnectionEvent::PeerOffline { channel_id } => {
-                self.handle_peer_offline(channel_id);
+                self.handle_peer_offline(channel_id).await;
             }
         }
     }
 
-    /// Handle a channel request (from a ChannelHandle)
+    /// Handle a channel request (from a ChannelHandle) by forwarding to the channel actor
     async fn handle_channel_request(&mut self, request: ChannelRequest) {
         match request {
             ChannelRequest::SendMessage {
                 channel_id,
                 message,
             } => {
-                trace!(
-                    "[{}] Handling SendMessage request for channel {}",
-                    self.name,
-                    channel_id
-                );
-                trace!(
-                    "[{}] Message preview: {:?}",
-                    self.name,
-                    serde_json::to_string(&message)
-                        .unwrap_or_else(|_| "failed to serialize".to_string())
-                        .chars()
-                        .take(200)
-                        .collect::<String>()
-                );
-
-                // Send through the channel's reliability layer
-                // We need to remove the channel temporarily to avoid borrowing issues
-                if let Some(mut channel) = self.channels.remove(&channel_id) {
-                    if let Err(e) = channel.send_message_async(message, self).await {
-                        error!(
-                            "[{}] Failed to send message on channel {}: {:?}",
-                            self.name, channel_id, e
+                if let Some(tx) = self.channel_actors.get(&channel_id) {
+                    if tx
+                        .send(ChannelActorMessage::SendMessage(message))
+                        .await
+                        .is_err()
+                    {
+                        debug!(
+                            "[{}] Channel actor {} is no longer running",
+                            self.name, channel_id
                         );
+                        self.channel_actors.remove(&channel_id);
                     }
-                    // Put the channel back
-                    self.channels.insert(channel_id, channel);
                 } else {
                     warn!(
                         "[{}] Channel {} not found for sending message",
@@ -578,10 +585,20 @@ impl SignalingDevice {
                 }
             }
             ChannelRequest::SendError { channel_id, error } => {
-                self.send_error(&channel_id, error).await;
+                if let Some(tx) = self.channel_actors.get(&channel_id) {
+                    if tx
+                        .send(ChannelActorMessage::SendError(error))
+                        .await
+                        .is_err()
+                    {
+                        self.channel_actors.remove(&channel_id);
+                    }
+                }
             }
             ChannelRequest::Close { channel_id } => {
-                self.channels.remove(&channel_id);
+                if let Some(tx) = self.channel_actors.remove(&channel_id) {
+                    let _ = tx.send(ChannelActorMessage::Close).await;
+                }
                 debug!("[{}] Closed channel {}", self.name, channel_id);
             }
         }
@@ -687,7 +704,7 @@ impl SignalingDevice {
         self.ws_handle.clone()
     }
 
-    /// Handle incoming message on a channel
+    /// Handle incoming message on a channel by routing to the appropriate channel actor
     async fn handle_message(&mut self, channel_id: String, message: JsonValue, authorized: bool) {
         trace!(
             "[{}] handle_message called for channel_id={}, authorized={}",
@@ -695,70 +712,49 @@ impl SignalingDevice {
             channel_id,
             authorized
         );
-        // Check if we have an existing channel
-        if self.channels.contains_key(&channel_id) {
-            trace!("[{}] Channel already exists", self.name);
 
-            // Remove channel temporarily to avoid borrow issues
-            let mut channel = self.channels.remove(&channel_id).unwrap();
-
-            // Dispatch to existing channel
-            if let Err(e) = channel.handle_routing_message(message, self).await {
-                error!(
-                    "[{}] Error handling message on channel {}: {:?}",
-                    self.name, channel_id, e
+        if let Some(tx) = self.channel_actors.get(&channel_id) {
+            // Forward to existing channel actor
+            if tx
+                .send(ChannelActorMessage::RoutingMessage(message))
+                .await
+                .is_err()
+            {
+                debug!(
+                    "[{}] Channel actor {} is no longer running",
+                    self.name, channel_id
                 );
+                self.channel_actors.remove(&channel_id);
             }
-
-            // Put the channel back
-            self.channels.insert(channel_id, channel);
         } else {
-            trace!(
-                "[{}] No existing channel, checking if initial message...",
-                self.name
-            );
-            // No existing channel - check if this is an initial message (seq 0)
+            // No existing channel actor - check if this is an initial message (seq 0)
             match SignalingChannel::is_initial_message(&message) {
                 Ok(true) => {
                     debug!(
-                        "[{}] Initial message detected, creating new channel",
+                        "[{}] Initial message detected, spawning channel actor",
                         self.name
                     );
-                    // Create new channel with message channel set up
-                    let channel_for_map = SignalingChannel::new(self.name, channel_id.clone());
-                    let (mut channel_with_rx, message_rx) = channel_for_map.with_message_channel();
-                    channel_with_rx.set_state(SignalingChannelState::Connected);
 
-                    // Set the device sender so the channel can send messages back
-                    channel_with_rx.set_device_sender(self.channel_request_tx.clone());
-
-                    // Handle the initial message
-                    if let Err(e) = channel_with_rx.handle_routing_message(message, self).await {
-                        error!(
-                            "[{}] Error handling initial message on channel {}: {:?}",
-                            self.name, channel_id, e
-                        );
-                        return;
-                    }
-
-                    // Add to channels map
-                    self.channels.insert(channel_id.clone(), channel_with_rx);
-
-                    // Create a handle for the channel (lightweight, can be cloned)
-                    let handle =
-                        ChannelHandle::new(channel_id.clone(), self.channel_request_tx.clone());
-
-                    // Emit NewChannel event after adding to map
-                    // The message_rx is sent along with the handle so tests can receive messages
-                    let event = DeviceEvent::NewChannel {
-                        handle,
-                        message_rx,
-                        authorized,
+                    let ws_handle = match &self.ws_handle {
+                        Some(handle) => handle.clone(),
+                        None => {
+                            error!("[{}] No WebSocket handle in Connected state", self.name);
+                            return;
+                        }
                     };
 
-                    if let Err(e) = self.device_event_tx.try_send(event) {
-                        error!("[{}] Failed to emit NewChannel event: {:?}", self.name, e);
-                    }
+                    let (tx, rx) = mpsc::channel(32);
+                    tokio::spawn(run_channel_actor(ChannelActorParams {
+                        name: self.name,
+                        channel_id: channel_id.clone(),
+                        initial_message: message,
+                        authorized,
+                        ws_handle,
+                        channel_request_tx: self.channel_request_tx.clone(),
+                        device_event_tx: self.device_event_tx.clone(),
+                        rx,
+                    }));
+                    self.channel_actors.insert(channel_id, tx);
                 }
                 Ok(false) => {
                     // Not an initial message and no channel exists - send error
@@ -770,7 +766,7 @@ impl SignalingDevice {
                         code: error_codes::CHANNEL_NOT_FOUND.to_string(),
                         message: Some(format!("Channel {} not found", channel_id)),
                     };
-                    self.send_error(&channel_id, error).await;
+                    self.send_error_direct(&channel_id, error).await;
                 }
                 Err(e) => {
                     error!(
@@ -782,33 +778,39 @@ impl SignalingDevice {
         }
     }
 
-    /// Handle error on a channel
-    fn handle_channel_error(&mut self, channel_id: String, code: String, message: Option<String>) {
-        if let Some(channel) = self.channels.get_mut(&channel_id) {
-            let error = Error::Signaling(format!(
-                "Channel error: {} - {}",
-                code,
-                message.unwrap_or_default()
-            ));
-            channel.handle_error(error);
+    /// Handle error on a channel by forwarding to its actor
+    async fn handle_channel_error(
+        &mut self,
+        channel_id: String,
+        code: String,
+        message: Option<String>,
+    ) {
+        if let Some(tx) = self.channel_actors.get(&channel_id) {
+            if tx
+                .send(ChannelActorMessage::Error { code, message })
+                .await
+                .is_err()
+            {
+                self.channel_actors.remove(&channel_id);
+            }
         }
     }
 
-    /// Handle peer connected notification
+    /// Handle peer connected notification by forwarding to the channel actor
     async fn handle_peer_connected(&mut self, channel_id: String) {
-        if self.channels.contains_key(&channel_id) {
-            // Remove channel temporarily to avoid borrow issues
-            let mut channel = self.channels.remove(&channel_id).unwrap();
-            channel.handle_peer_connected(self).await;
-            // Put the channel back
-            self.channels.insert(channel_id, channel);
+        if let Some(tx) = self.channel_actors.get(&channel_id) {
+            if tx.send(ChannelActorMessage::PeerConnected).await.is_err() {
+                self.channel_actors.remove(&channel_id);
+            }
         }
     }
 
-    /// Handle peer offline notification
-    fn handle_peer_offline(&mut self, channel_id: String) {
-        if let Some(channel) = self.channels.get_mut(&channel_id) {
-            channel.handle_peer_offline();
+    /// Handle peer offline notification by forwarding to the channel actor
+    async fn handle_peer_offline(&mut self, channel_id: String) {
+        if let Some(tx) = self.channel_actors.get(&channel_id) {
+            if tx.send(ChannelActorMessage::PeerOffline).await.is_err() {
+                self.channel_actors.remove(&channel_id);
+            }
         }
     }
 
@@ -820,48 +822,17 @@ impl SignalingDevice {
     }
 }
 
-/// Implement SignalingService trait so channels can send messages through the device
-impl SignalingService for SignalingDevice {
-    async fn send_routing_message(&self, channel_id: &str, message: JsonValue) {
-        if self.state != SignalingConnectionState::Connected {
-            return; // Can't send if not connected
-        }
-
-        if let Some(handle) = &self.ws_handle {
-            // Wrap message in routing layer
-            let routing_msg = RoutingMessage::Message {
-                channel_id: channel_id.to_string(),
-                message,
-                authorized: None,
-            };
-
-            // Await the send to ensure messages are sent in order
-            // This prevents the race condition where tokio::spawn would allow
-            // messages to be reordered
-            if let Err(e) = handle.send_message(routing_msg).await {
-                error!("[{}] Failed to send routing message: {}", self.name, e);
-            }
-        }
-    }
-
-    async fn send_error(&self, channel_id: &str, error: ErrorInfo) {
-        if self.state != SignalingConnectionState::Connected {
-            return;
-        }
-
+impl SignalingDevice {
+    /// Send an error directly via the WebSocket for channels without an actor
+    async fn send_error_direct(&self, channel_id: &str, error: ErrorInfo) {
         if let Some(handle) = &self.ws_handle {
             let routing_msg = RoutingMessage::Error {
                 channel_id: channel_id.to_string(),
                 error,
             };
-
             if let Err(e) = handle.send_message(routing_msg).await {
                 error!("[{}] Failed to send error message: {}", self.name, e);
             }
         }
-    }
-
-    fn close_channel(&mut self, channel_id: &str) {
-        self.channels.remove(channel_id);
     }
 }
