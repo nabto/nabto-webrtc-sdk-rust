@@ -1,5 +1,7 @@
 # Nabto WebRTC SDK for Rust
 
+> **⚠️ Unstable API:** This SDK is under active development. The API is not stable and may change without notice. Use at your own risk.
+
 A Rust SDK for Nabto WebRTC signaling, enabling peer-to-peer WebRTC connections through the Nabto platform.
 
 ## Overview
@@ -225,7 +227,7 @@ The `nabto_webrtc_perfect_negotiation` crate provides:
 
 ## Development Status
 
-This SDK is production-ready with comprehensive test coverage:
+This SDK is experimental and under active development. The API is **not stable** and may undergo breaking changes without notice. It includes:
 - 21 integration tests covering connectivity, reliability, and channel handling
 - CI/CD pipeline with automated testing
 - Full device and client implementation
