@@ -1,5 +1,8 @@
 //! Nabto WebRTC SDK for Rust
 //!
+//! **⚠️ Unstable API:** This SDK is under active development. The API is not stable and may
+//! change without notice.
+//!
 //! This library provides a Rust interface for WebRTC signaling using the Nabto platform.
 //!
 //! # Module Structure
