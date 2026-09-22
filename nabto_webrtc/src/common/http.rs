@@ -285,28 +285,43 @@ fn parse_retry_after(value: Option<&str>) -> Option<Duration> {
 /// so the two obsolete formats in RFC 9110 are not accepted. Implemented here
 /// rather than pulling in a date crate: the SDK targets embedded devices and
 /// this is the only date it ever parses.
+///
+/// Every field is required to be exactly the width RFC 9110 gives it. That is
+/// not pedantry: the value comes off the network, and an unbounded year would
+/// overflow the arithmetic in [`days_from_civil`] rather than being rejected.
 fn parse_http_date(value: &str) -> Option<u64> {
     const MONTHS: [&str; 12] = [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     ];
 
+    /// Parse a field of exactly `width` ASCII digits.
+    ///
+    /// `str::parse` alone would accept `+1`, `1_0`, unicode digits and a year
+    /// of any length.
+    fn digits(value: &str, width: usize) -> Option<u64> {
+        if value.len() != width || !value.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        value.parse().ok()
+    }
+
     // "Sun, 06 Nov 1994 08:49:37 GMT"
     let rest = value.split_once(", ")?.1;
     let mut parts = rest.split(' ');
-    let day: u64 = parts.next()?.parse().ok()?;
+    let day = digits(parts.next()?, 2)?;
     let month = parts.next()?;
-    let year: u64 = parts.next()?.parse().ok()?;
+    let year = digits(parts.next()?, 4)?;
     let time = parts.next()?;
-    if parts.next()? != "GMT" {
+    if parts.next()? != "GMT" || parts.next().is_some() {
         return None;
     }
 
     let month = MONTHS.iter().position(|m| *m == month)? as u64 + 1;
 
     let mut hms = time.split(':');
-    let hour: u64 = hms.next()?.parse().ok()?;
-    let minute: u64 = hms.next()?.parse().ok()?;
-    let second: u64 = hms.next()?.parse().ok()?;
+    let hour = digits(hms.next()?, 2)?;
+    let minute = digits(hms.next()?, 2)?;
+    let second = digits(hms.next()?, 2)?;
     if hms.next().is_some() || hour > 23 || minute > 59 || second > 60 || day == 0 || day > 31 {
         return None;
     }
@@ -317,7 +332,11 @@ fn parse_http_date(value: &str) -> Option<u64> {
         return Some(0);
     }
 
-    Some(days_from_civil(year, month, day) * 86400 + hour * 3600 + minute * 60 + second)
+    // The four-digit year bounds this well inside u64, but keep the arithmetic
+    // total so a future change to the parsing cannot turn into a panic.
+    days_from_civil(year, month, day)
+        .checked_mul(86400)?
+        .checked_add(hour * 3600 + minute * 60 + second)
 }
 
 /// Days since the unix epoch for a Gregorian date at or after 1970-01-01.
@@ -424,6 +443,59 @@ mod tests {
         assert_eq!(parse_http_date("Sun, 06 Nov 1994 25:49:37 GMT"), None);
         assert_eq!(parse_http_date("Sun, 32 Nov 1994 08:49:37 GMT"), None);
         assert_eq!(parse_http_date("garbage"), None);
+    }
+
+    /// The year comes off the network, so an out-of-range one must be rejected
+    /// rather than overflowing the day arithmetic.
+    #[test]
+    fn test_http_date_rejects_out_of_range_year() {
+        // 19 digits: parses as u64, overflows days_from_civil if not rejected.
+        assert_eq!(
+            parse_http_date("Sun, 06 Nov 1844674407370955161 08:49:37 GMT"),
+            None
+        );
+        // 20 digits: beyond u64 entirely.
+        assert_eq!(
+            parse_http_date("Sun, 06 Nov 99999999999999999999 08:49:37 GMT"),
+            None
+        );
+        // Anything that is not exactly four digits.
+        assert_eq!(parse_http_date("Sun, 06 Nov 99999 08:49:37 GMT"), None);
+        assert_eq!(parse_http_date("Sun, 06 Nov 199 08:49:37 GMT"), None);
+        assert_eq!(parse_http_date("Sun, 06 Nov  1994 08:49:37 GMT"), None);
+    }
+
+    /// Every field is fixed width, and `str::parse` alone would not enforce it.
+    #[test]
+    fn test_http_date_rejects_malformed_fields() {
+        assert_eq!(parse_http_date("Sun, 6 Nov 1994 08:49:37 GMT"), None);
+        assert_eq!(parse_http_date("Sun, 06 Nov 1994 8:49:37 GMT"), None);
+        assert_eq!(parse_http_date("Sun, +6 Nov 1994 08:49:37 GMT"), None);
+        assert_eq!(parse_http_date("Sun, 06 Nov +994 08:49:37 GMT"), None);
+        assert_eq!(parse_http_date("Sun, 06 Nov 1994 08:49:37 GMT extra"), None);
+        // Still accepts the canonical form.
+        assert_eq!(
+            parse_http_date("Sun, 06 Nov 1994 08:49:37 GMT"),
+            Some(784111777)
+        );
+    }
+
+    /// The whole point of the header: a hostile or buggy value must not take
+    /// the process down.
+    #[test]
+    fn test_retry_after_never_panics() {
+        for value in [
+            "Sun, 06 Nov 1844674407370955161 08:49:37 GMT",
+            "Sun, 06 Nov 9999999999999999999999 99:99:99 GMT",
+            "Mon, 99 Zzz 0000 00:00:00 GMT",
+            ", , , ",
+            "18446744073709551615",
+            "-1",
+            "",
+            "   ",
+        ] {
+            let _ = parse_retry_after(Some(value));
+        }
     }
 
     /// Serve one canned HTTP response and return the endpoint url.

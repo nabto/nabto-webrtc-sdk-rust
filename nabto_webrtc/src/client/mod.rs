@@ -428,15 +428,19 @@ impl SignalingClient {
     }
 
     fn handle_channel_error(&mut self, _channel_id: String, code: String, message: Option<String>) {
-        let error = Error::Signaling(format!(
-            "Channel error: {} - {}",
-            code,
-            message.unwrap_or_default()
-        ));
+        // Build the description once. Wrapping an Error in another Error gave
+        // the event a doubled "Signaling error: Signaling error: ..." message,
+        // and unwrap_or_default left a dangling " - " when the peer sent no
+        // message.
+        let description = match &message {
+            Some(message) => format!("Channel error: {} - {}", code, message),
+            None => format!("Channel error: {}", code),
+        };
+
         self.emit(SignalingClientEvent::Error(Error::Signaling(
-            error.to_string(),
+            description.clone(),
         )));
-        self.channel.handle_error(error);
+        self.channel.handle_error(Error::Signaling(description));
     }
 
     fn calculate_reconnect_delay(&self) -> u32 {

@@ -137,7 +137,9 @@ impl DeviceTokenGenerator {
             .map_err(|e| Error::Other(format!("System time error: {}", e)))?
             .as_secs();
 
-        let expiration = now + self.token_lifetime.as_secs();
+        // Saturate rather than overflow: the lifetime is caller supplied, and
+        // an absurd one should produce an absurd expiry, not a panic.
+        let expiration = now.saturating_add(self.token_lifetime.as_secs());
 
         // Create claims
         let claims = Claims {
@@ -218,6 +220,23 @@ kroaroSWQLA/A+6sCQRb8g+Ip4yhRANCAATc3dMAfNPk6dmWOLoYdOLwsuC6OQ4x
         // JWT tokens have 3 parts separated by dots
         let parts: Vec<&str> = token.split('.').collect();
         assert_eq!(parts.len(), 3, "JWT should have 3 parts");
+    }
+
+    /// The lifetime is caller supplied; an extreme one must not panic.
+    #[test]
+    fn test_extreme_token_lifetime_does_not_overflow() {
+        let generator = DeviceTokenGenerator::with_token_lifetime(
+            "wp-test".to_string(),
+            "wd-test".to_string(),
+            TEST_PRIVATE_KEY.to_string(),
+            Duration::MAX,
+        )
+        .unwrap();
+
+        let token = generator
+            .generate_token()
+            .expect("an extreme lifetime should still produce a token");
+        assert!(!token.is_empty());
     }
 
     #[test]

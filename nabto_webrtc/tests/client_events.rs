@@ -246,10 +246,20 @@ async fn test_client_emits_error_event() {
     })
     .await;
 
+    let rendered = error.to_string();
     assert!(
-        error.to_string().contains("TEST_ERROR"),
-        "error should carry the code from the device, got: {}",
-        error
+        rendered.contains("TEST_ERROR"),
+        "error should carry the code from the device, got: {rendered}"
+    );
+    assert!(
+        rendered.contains("something went wrong"),
+        "error should carry the message from the device, got: {rendered}"
+    );
+    // The description used to be wrapped in an Error and then wrapped again.
+    assert_eq!(
+        rendered.matches("Signaling error").count(),
+        1,
+        "error description should not be doubly wrapped, got: {rendered}"
     );
 
     task.abort();
