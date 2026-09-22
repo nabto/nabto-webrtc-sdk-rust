@@ -498,24 +498,22 @@ async fn main() -> Result<()> {
     println!("Created VP8 video track");
     println!();
 
-    // Clone values for use in closures and later URL printing
-    let product_id_for_token = product_id.clone();
-    let device_id_for_token = device_id.clone();
+    // Clone values for later URL printing
     let product_id_for_url = product_id.clone();
     let device_id_for_url = device_id.clone();
 
-    // Create a token generator that uses the private key
-    let token_generator: nabto_webrtc::device::TokenGenerator = Arc::new(move || {
-        let generator = DeviceTokenGenerator::new(
-            product_id_for_token.clone(),
-            device_id_for_token.clone(),
-            private_key.clone(),
-        );
+    // Build the token generator once: it parses the private key and derives the
+    // key id up front, so this must not be done per token.
+    let generator = Arc::new(DeviceTokenGenerator::new(
+        product_id.clone(),
+        device_id.clone(),
+        private_key,
+    )?);
+    println!("Device key id: {}", generator.key_id());
 
-        Box::pin(async move {
-            // Generate JWT token with the private key
-            generator.generate_token()
-        })
+    let token_generator: nabto_webrtc::device::TokenGenerator = Arc::new(move || {
+        let generator = generator.clone();
+        Box::pin(async move { generator.generate_token() })
             as std::pin::Pin<
                 Box<dyn std::future::Future<Output = Result<String, nabto_webrtc::Error>> + Send>,
             >

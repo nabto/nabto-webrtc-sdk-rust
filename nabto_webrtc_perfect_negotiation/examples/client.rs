@@ -126,8 +126,11 @@ async fn main() -> Result<()> {
         loop {
             let event = event_rx.recv().await.unwrap();
             match event {
+                // Not reached in this example: ClientMessageTransport takes
+                // over message delivery and surfaces them as
+                // MessageTransportEvent above.
                 SignalingClientEvent::Message(value) => {
-                    debug!("SignalingClientEvent::Message");
+                    debug!("SignalingClientEvent::Message: {}", value);
                 }
 
                 SignalingClientEvent::ConnectionReconnect => {
@@ -153,8 +156,8 @@ async fn main() -> Result<()> {
                     );
                 }
 
-                SignalingClientEvent::Error => {
-                    error!("SignalingClientEvent::Error");
+                SignalingClientEvent::Error(err) => {
+                    error!("SignalingClientEvent::Error: {}", err);
                 }
             }
         }

@@ -258,3 +258,151 @@ impl Default for TestClient {
         Self::new()
     }
 }
+
+// ---------------------------------------------------------------------------
+// Client test API
+//
+// Mirrors the device test API above for the `/test/client` routes, where the
+// mock server simulates the *device* and the test drives a real
+// `SignalingClient`. See ClientTestInstance.ts in the JS SDK.
+// ---------------------------------------------------------------------------
+
+/// Options for creating a client test instance
+#[derive(Debug, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientTestOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fail_http: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fail_ws: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extra_client_connect_response_data: Option<bool>,
+    /// Force the client to present an access token when connecting.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub require_access_token: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub product_id_not_found: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_id_not_found: Option<bool>,
+}
+
+/// Response from creating a test client instance
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestClientResponse {
+    pub product_id: String,
+    pub device_id: String,
+    pub endpoint_url: String,
+    pub test_id: String,
+    pub access_token: String,
+}
+
+impl TestClient {
+    /// Create a new client test instance
+    pub async fn create_client_test(
+        &self,
+        options: ClientTestOptions,
+    ) -> Result<TestClientResponse, reqwest::Error> {
+        self.client
+            .post(&format!("{}/test/client", self.base_url))
+            .json(&options)
+            .send()
+            .await?
+            .json()
+            .await
+    }
+
+    /// Delete a client test instance
+    pub async fn delete_client_test(&self, test_id: &str) -> Result<(), reqwest::Error> {
+        self.client
+            .delete(&format!("{}/test/client/{}", self.base_url, test_id))
+            .send()
+            .await?;
+        Ok(())
+    }
+
+    /// Bring the simulated device online
+    pub async fn client_test_connect_device(&self, test_id: &str) -> Result<(), reqwest::Error> {
+        self.client
+            .post(&format!(
+                "{}/test/client/{}/connect-device",
+                self.base_url, test_id
+            ))
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(())
+    }
+
+    /// Take the simulated device offline
+    pub async fn client_test_disconnect_device(&self, test_id: &str) -> Result<(), reqwest::Error> {
+        self.client
+            .post(&format!(
+                "{}/test/client/{}/disconnect-device",
+                self.base_url, test_id
+            ))
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(())
+    }
+
+    /// Have the simulated device send signaling messages to the client
+    pub async fn client_test_send_device_messages(
+        &self,
+        test_id: &str,
+        messages: Vec<serde_json::Value>,
+    ) -> Result<(), reqwest::Error> {
+        self.client
+            .post(&format!(
+                "{}/test/client/{}/send-device-messages",
+                self.base_url, test_id
+            ))
+            .json(&serde_json::json!({ "messages": messages }))
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(())
+    }
+
+    /// Have the simulated device send a channel error to the client
+    pub async fn client_test_send_device_error(
+        &self,
+        test_id: &str,
+        error_code: &str,
+        error_message: &str,
+    ) -> Result<(), reqwest::Error> {
+        self.client
+            .post(&format!(
+                "{}/test/client/{}/send-device-error",
+                self.base_url, test_id
+            ))
+            .json(&serde_json::json!({
+                "errorCode": error_code,
+                "errorMessage": error_message,
+            }))
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(())
+    }
+
+    /// Wait for the simulated device to receive the given messages
+    pub async fn client_test_wait_for_device_messages(
+        &self,
+        test_id: &str,
+        messages: Vec<serde_json::Value>,
+        timeout_ms: u64,
+    ) -> Result<(), reqwest::Error> {
+        self.client
+            .post(&format!(
+                "{}/test/client/{}/wait-for-device-messages",
+                self.base_url, test_id
+            ))
+            .json(&serde_json::json!({ "messages": messages, "timeout": timeout_ms }))
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(())
+    }
+}

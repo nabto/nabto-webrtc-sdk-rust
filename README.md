@@ -47,70 +47,119 @@ webrtc = "0.14"
 ### Device-Side Example
 
 ```rust
-use nabto_webrtc::device::{SignalingDevice, SignalingDeviceOptions};
-use nabto_webrtc::util::{DeviceMessageTransport, SecurityMode};
-use nabto_webrtc::SignalingConnectionState;
+use nabto_webrtc::device::{
+    DeviceEvent, DeviceTokenGenerator, SignalingDevice, SignalingDeviceOptions, TokenGenerator,
+};
+use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create a message transport with JWT signing
-    let transport = DeviceMessageTransport::new(
+    let private_key = std::fs::read_to_string("device_key.pem")?;
+
+    // Build the token generator once and reuse it: it parses the private key
+    // and derives the key id up front.
+    let generator = Arc::new(DeviceTokenGenerator::new(
         "wp-your-product".to_string(),
         "wd-your-device".to_string(),
-        SecurityMode::jwt_from_file("device_key.pem")?,
-        None, // Uses default endpoint
-    );
+        private_key,
+    )?);
+    println!("Device key id: {}", generator.key_id());
 
-    // Start the transport
-    transport.start().await?;
+    let token_generator: TokenGenerator = Arc::new(move || {
+        let generator = generator.clone();
+        Box::pin(async move { generator.generate_token() })
+    });
 
-    // Wait for connection
-    while transport.connection_state() != SignalingConnectionState::Connected {
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-    }
+    let options = SignalingDeviceOptions::builder(
+        "wp-your-product".to_string(),
+        "wd-your-device".to_string(),
+        token_generator,
+    )
+    .build();
 
-    println!("Device connected!");
+    let (mut device, mut event_rx, _command_tx) = SignalingDevice::new(options);
 
-    // Listen for incoming messages
-    loop {
-        if let Some(event) = transport.poll_event().await {
+    tokio::spawn(async move {
+        while let Some(event) = event_rx.recv().await {
             match event {
-                MessageTransportEvent::Message { message, channel_id } => {
-                    println!("Received message on channel {}: {}", channel_id, message);
+                // Each client gets its own channel, with its own message
+                // receiver.
+                DeviceEvent::NewChannel {
+                    handle,
+                    mut message_rx,
+                    authorized,
+                } => {
+                    println!("New channel {} (authorized: {})", handle.channel_id(), authorized);
+                    tokio::spawn(async move {
+                        while let Some(message) = message_rx.recv().await {
+                            println!("Received: {}", message);
+                        }
+                    });
                 }
-                _ => {}
+                DeviceEvent::StateChanged { old_state, new_state } => {
+                    println!("Connection state: {:?} -> {:?}", old_state, new_state);
+                }
             }
         }
-    }
+    });
+
+    // Connects, then handles reconnection and incoming channels until stopped.
+    device.run().await?;
+    Ok(())
 }
 ```
 
 ### Client-Side Example
 
 ```rust
-use nabto_webrtc::client::{SignalingClient, SignalingClientOptions};
-use nabto_webrtc::util::{ClientMessageTransport, SecurityMode};
+use nabto_webrtc::client::{SignalingClient, SignalingClientEvent, SignalingClientOptions};
+use nabto_webrtc::SignalingConnectionState;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let transport = ClientMessageTransport::new(
+    let options = SignalingClientOptions::builder(
         "wp-your-product".to_string(),
         "wd-your-device".to_string(),
-        SecurityMode::None, // Or use JWT
-        None,
-    );
+    )
+    // Fail here with Error::DeviceOffline rather than connecting to a device
+    // that cannot answer.
+    .require_online(true)
+    .build();
 
-    transport.start().await?;
+    let (mut client, mut event_rx) = SignalingClient::new(options).await?;
+    let handle = client.channel_handle.clone();
 
-    // Connect and create a channel
-    let channel_id = transport.create_channel().await?;
+    let client_task = tokio::spawn(async move { client.run().await });
 
-    // Send a message
-    transport.send_message(channel_id, "Hello from client!".to_string()).await?;
+    while let Some(event) = event_rx.recv().await {
+        match event {
+            SignalingClientEvent::ConnectionStateChange(SignalingConnectionState::Connected) => {
+                handle
+                    .send_message(serde_json::json!({ "type": "SETUP_REQUEST" }))
+                    .await?;
+            }
+            SignalingClientEvent::Message(message) => {
+                println!("Received: {}", message);
+                break;
+            }
+            SignalingClientEvent::Error(err) => {
+                eprintln!("Signaling error: {}", err);
+                break;
+            }
+            _ => {}
+        }
+    }
 
+    client_task.abort();
     Ok(())
 }
 ```
+
+For WebRTC negotiation you normally want the higher level
+`ClientMessageTransport` / `DeviceMessageTransport` instead of handling raw
+signaling messages; see `nabto_webrtc_perfect_negotiation/examples/client.rs`.
+Note that `ClientMessageTransport` takes over message delivery, so
+`SignalingClientEvent::Message` is not emitted when one is attached.
 
 ### Available Examples
 

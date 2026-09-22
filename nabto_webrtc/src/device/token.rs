@@ -8,7 +8,7 @@ use p256::ecdsa::SigningKey;
 use p256::pkcs8::{DecodePrivateKey, EncodePublicKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// JWT claims for device authentication
 #[derive(Debug, Serialize, Deserialize)]
@@ -26,34 +26,80 @@ struct Claims {
 }
 
 /// Device Token Generator for creating JWT tokens
+///
+/// The private key is parsed once, when the generator is constructed: deriving
+/// the key id requires an elliptic curve point multiplication, which dominates
+/// the cost of producing a token. Construct one generator and reuse it rather
+/// than building one per token.
 pub struct DeviceTokenGenerator {
-    product_id: String,
-    device_id: String,
-    private_key: String,
+    /// Pre-parsed signing key.
+    encoding_key: EncodingKey,
+    /// Pre-derived key id, see [`DeviceTokenGenerator::key_id`].
+    key_id: String,
+    /// Pre-rendered `resource` claim.
+    resource: String,
+    /// How long issued tokens remain valid.
+    token_lifetime: Duration,
 }
+
+/// Default lifetime of a generated device token.
+pub const DEFAULT_TOKEN_LIFETIME: Duration = Duration::from_secs(24 * 60 * 60);
 
 impl DeviceTokenGenerator {
     /// Create a new DeviceTokenGenerator
+    ///
+    /// Parses `private_key`, so an invalid key is reported here rather than on
+    /// the first connect attempt.
     ///
     /// # Arguments
     ///
     /// * `product_id` - Product ID of the device
     /// * `device_id` - Device ID of the device
     /// * `private_key` - Private key in PEM format (PKCS#8)
-    pub fn new(product_id: String, device_id: String, private_key: String) -> Self {
-        Self {
-            product_id,
-            device_id,
-            private_key,
-        }
+    pub fn new(product_id: String, device_id: String, private_key: String) -> Result<Self> {
+        Self::with_token_lifetime(product_id, device_id, private_key, DEFAULT_TOKEN_LIFETIME)
     }
 
-    /// Get the key ID from the private key
+    /// Create a new DeviceTokenGenerator issuing tokens with a given lifetime.
     ///
-    /// The key ID is computed as "device:" + hex(sha256(SubjectPublicKeyInfo))
-    fn get_key_id(&self) -> Result<String> {
+    /// See [`DeviceTokenGenerator::new`]; the default lifetime is
+    /// [`DEFAULT_TOKEN_LIFETIME`].
+    pub fn with_token_lifetime(
+        product_id: String,
+        device_id: String,
+        private_key: String,
+        token_lifetime: Duration,
+    ) -> Result<Self> {
+        let key_id = Self::derive_key_id(&private_key)?;
+
+        let encoding_key = EncodingKey::from_ec_pem(private_key.as_bytes()).map_err(|e| {
+            Error::Configuration(format!("Failed to parse private key for signing: {}", e))
+        })?;
+
+        Ok(Self {
+            encoding_key,
+            key_id,
+            resource: format!("urn:nabto:webrtc:{}:{}", product_id, device_id),
+            token_lifetime,
+        })
+    }
+
+    /// The key id this generator puts in the `kid` header of its tokens.
+    ///
+    /// Computed as `"device:" + hex(sha256(SubjectPublicKeyInfo))`. This is the
+    /// value the signaling service looks up to find the device's public key, so
+    /// a mismatch with what was registered shows up as an HTTP 401 on connect;
+    /// log this to check it against the registered key.
+    pub fn key_id(&self) -> &str {
+        &self.key_id
+    }
+
+    /// Derive the key id from a PEM encoded private key.
+    ///
+    /// The key id is computed as "device:" + hex(sha256(SubjectPublicKeyInfo))
+    fn derive_key_id(private_key: &str) -> Result<String> {
         // Parse the private key
-        let signing_key = SigningKey::from_pkcs8_pem(&self.private_key)
+        let signing_key = SigningKey::from_pkcs8_pem(private_key)
             .map_err(|e| Error::Configuration(format!("Invalid private key: {}", e)))?;
 
         // Get the verifying key (public key)
@@ -77,27 +123,21 @@ impl DeviceTokenGenerator {
 
     /// Generate a JWT token for the device
     ///
-    /// The token will be valid for 24 hours and include the necessary scopes
-    /// for device connection and TURN server access.
+    /// The token is valid for the generator's token lifetime (24 hours by
+    /// default) and includes the necessary scopes for device connection and
+    /// TURN server access.
     ///
     /// # Returns
     ///
     /// A JWT token string that can be used to authenticate with the signaling service
     pub fn generate_token(&self) -> Result<String> {
-        // Get the key ID
-        let key_id = self.get_key_id()?;
-
-        // Create the resource URN
-        let resource = format!("urn:nabto:webrtc:{}:{}", self.product_id, self.device_id);
-
         // Get current timestamp
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|e| Error::Other(format!("System time error: {}", e)))?
             .as_secs();
 
-        // Token valid for 1 day
-        let expiration = now + (24 * 60 * 60);
+        let expiration = now + self.token_lifetime.as_secs();
 
         // Create claims
         let claims = Claims {
@@ -105,21 +145,16 @@ impl DeviceTokenGenerator {
             iat: now,
             exp: expiration,
             scope: "device:connect turn".to_string(),
-            resource,
+            resource: self.resource.clone(),
         };
 
         // Create header with key ID
         let mut header = Header::new(Algorithm::ES256);
-        header.kid = Some(key_id);
+        header.kid = Some(self.key_id.clone());
         header.typ = Some("JWT".to_string());
 
-        // Create encoding key from PEM
-        let encoding_key = EncodingKey::from_ec_pem(self.private_key.as_bytes()).map_err(|e| {
-            Error::Configuration(format!("Failed to parse private key for signing: {}", e))
-        })?;
-
         // Generate the JWT
-        let token = encode(&header, &claims, &encoding_key)
+        let token = encode(&header, &claims, &self.encoding_key)
             .map_err(|e| Error::Other(format!("Failed to generate JWT: {}", e)))?;
 
         Ok(token)
@@ -137,24 +172,38 @@ kroaroSWQLA/A+6sCQRb8g+Ip4yhRANCAATc3dMAfNPk6dmWOLoYdOLwsuC6OQ4x
 1vOzzk4iv+0GYsurToJkZ7FohDBPiup+FNLWyaiUnXgdWay/vLjH2P1k
 -----END PRIVATE KEY-----"#;
 
-    #[test]
-    fn test_token_generator_creation() {
-        let generator = DeviceTokenGenerator::new(
+    fn test_generator() -> DeviceTokenGenerator {
+        DeviceTokenGenerator::new(
             "wp-test".to_string(),
             "wd-test".to_string(),
             TEST_PRIVATE_KEY.to_string(),
+        )
+        .expect("test key should parse")
+    }
+
+    #[test]
+    fn test_token_generator_creation() {
+        let generator = test_generator();
+        assert_eq!(generator.resource, "urn:nabto:webrtc:wp-test:wd-test");
+        assert_eq!(generator.token_lifetime, DEFAULT_TOKEN_LIFETIME);
+    }
+
+    #[test]
+    fn test_invalid_private_key_fails_at_construction() {
+        let result = DeviceTokenGenerator::new(
+            "wp-test".to_string(),
+            "wd-test".to_string(),
+            "-----BEGIN PRIVATE KEY-----\nbm90YWtleQ==\n-----END PRIVATE KEY-----".to_string(),
         );
-        assert_eq!(generator.product_id, "wp-test");
-        assert_eq!(generator.device_id, "wd-test");
+        assert!(
+            result.is_err(),
+            "an invalid key should be rejected by new()"
+        );
     }
 
     #[test]
     fn test_generate_token() {
-        let generator = DeviceTokenGenerator::new(
-            "wp-test".to_string(),
-            "wd-test".to_string(),
-            TEST_PRIVATE_KEY.to_string(),
-        );
+        let generator = test_generator();
 
         let result = generator.generate_token();
         assert!(
@@ -172,24 +221,46 @@ kroaroSWQLA/A+6sCQRb8g+Ip4yhRANCAATc3dMAfNPk6dmWOLoYdOLwsuC6OQ4x
     }
 
     #[test]
-    fn test_get_key_id() {
-        let generator = DeviceTokenGenerator::new(
+    fn test_key_id() {
+        let generator = test_generator();
+
+        assert_eq!(
+            generator.key_id(),
+            "device:d253a3df618f08d76696ddc66fdc35de5d75ed12e1908503b1575e005e79a516"
+        );
+    }
+
+    #[test]
+    fn test_key_id_is_in_token_header() {
+        let generator = test_generator();
+        let token = generator.generate_token().unwrap();
+
+        let header = jsonwebtoken::decode_header(&token).unwrap();
+        assert_eq!(header.kid.as_deref(), Some(generator.key_id()));
+        assert_eq!(header.alg, Algorithm::ES256);
+    }
+
+    #[test]
+    fn test_token_lifetime_is_honoured() {
+        let generator = DeviceTokenGenerator::with_token_lifetime(
             "wp-test".to_string(),
             "wd-test".to_string(),
             TEST_PRIVATE_KEY.to_string(),
-        );
+            Duration::from_secs(60),
+        )
+        .unwrap();
 
-        let key_id = generator.get_key_id();
-        assert!(
-            key_id.is_ok(),
-            "Key ID generation should succeed: {:?}",
-            key_id.err()
-        );
+        let token = generator.generate_token().unwrap();
+        // Decode without verifying: we only care about the claims we set.
+        let payload = token.split('.').nth(1).unwrap();
+        let decoded =
+            base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, payload)
+                .unwrap();
+        let claims: serde_json::Value = serde_json::from_slice(&decoded).unwrap();
 
-        let kid = key_id.unwrap();
-        assert_eq!(
-            kid,
-            "device:d253a3df618f08d76696ddc66fdc35de5d75ed12e1908503b1575e005e79a516"
-        );
+        let exp = claims["exp"].as_u64().unwrap();
+        let iat = claims["iat"].as_u64().unwrap();
+        assert_eq!(exp - iat, 60);
+        assert_eq!(claims["resource"], "urn:nabto:webrtc:wp-test:wd-test");
     }
 }

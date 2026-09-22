@@ -4,7 +4,7 @@ use super::reliability::{Reliability, ReliabilityMessage};
 use crate::common::routing::{error_codes, ErrorInfo};
 use crate::common::SignalingChannelState;
 use crate::{Error, Result};
-use log::{debug, error, trace};
+use log::{debug, error, trace, warn};
 use serde_json::Value as JsonValue;
 use std::collections::VecDeque;
 use tokio::sync::mpsc;
@@ -141,6 +141,7 @@ pub struct SignalingChannel {
     operations: VecDeque<Operation>,
     handling_operations: bool,
     message_tx: Option<mpsc::Sender<JsonValue>>,
+    state_tx: Option<mpsc::Sender<SignalingChannelState>>,
     /// Channel for sending requests back to the device
     device_tx: Option<mpsc::Sender<ChannelRequest>>,
 }
@@ -156,6 +157,7 @@ impl SignalingChannel {
             operations: VecDeque::new(),
             handling_operations: false,
             message_tx: None,
+            state_tx: None,
             device_tx: None,
         }
     }
@@ -180,11 +182,24 @@ impl SignalingChannel {
         (self, rx)
     }
 
-    // @TODO: stop-in gap as the above with_message_channel for some reason tries to take ownership
+    /// Get a receiver for messages on this channel, without consuming it.
+    ///
+    /// Takes over message delivery for this channel: only one receiver can be
+    /// installed at a time, and calling this replaces any previously installed
+    /// one. On a [`SignalingClient`](crate::client::SignalingClient) that means
+    /// messages stop being emitted as
+    /// [`SignalingClientEvent::Message`](crate::client::SignalingClientEvent::Message).
     pub fn with_msg_channel(&mut self) -> mpsc::Receiver<JsonValue> {
         let (tx, rx) = mpsc::channel(32);
         self.message_tx = Some(tx);
         rx
+    }
+
+    /// Set the channel state event sender for this channel
+    ///
+    /// This allows the channel to emit state changes to the application.
+    pub fn set_state_sender(&mut self, tx: mpsc::Sender<SignalingChannelState>) {
+        self.state_tx = Some(tx);
     }
 
     /// Get the channel ID
@@ -203,7 +218,14 @@ impl SignalingChannel {
             return; // Skip duplicate state changes
         }
         self.state = state;
-        // TODO: Emit channelstatechange event
+        if let Some(tx) = &self.state_tx {
+            if tx.try_send(state).is_err() {
+                warn!(
+                    "[{}] Dropped channel state change {:?} on channel {}: receiver is full or gone",
+                    self.name, state, self.channel_id
+                );
+            }
+        }
     }
 
     /// Check if a reliability message is an initial message (seq 0)
@@ -321,7 +343,6 @@ impl SignalingChannel {
         {
             return;
         }
-        // TODO: Emit error event
         error!(
             "[{}] Channel {} error: {:?}",
             self.name, self.channel_id, error
@@ -438,8 +459,21 @@ impl SignalingChannel {
                     //eprintln!("Channel {} received message: {:?}", self.channel_id, msg);
                     // Send message through channel if available
                     if let Some(tx) = &self.message_tx {
-                        // Try to send, ignore if receiver is dropped
-                        let _ = tx.try_send(msg);
+                        if tx.try_send(msg).is_err() {
+                            // The message was already ACKed by the reliability
+                            // layer, so a drop here is silent data loss: log it
+                            // rather than letting it look like the peer never
+                            // sent anything.
+                            warn!(
+                                "[{}] Dropped inbound message on channel {}: receiver is full or gone",
+                                self.name, self.channel_id
+                            );
+                        }
+                    } else {
+                        warn!(
+                            "[{}] Dropped inbound message on channel {}: no receiver installed",
+                            self.name, self.channel_id
+                        );
                     }
                 }
             }

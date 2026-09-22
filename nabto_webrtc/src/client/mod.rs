@@ -17,15 +17,26 @@ use tokio::sync::mpsc;
 use tokio::time::Instant;
 use tokio_tungstenite::connect_async;
 
+/// Events emitted by a [`SignalingClient`] on the receiver returned from
+/// [`SignalingClient::new`].
 pub enum SignalingClientEvent {
+    /// A signaling message was received from the device.
+    ///
+    /// Not emitted if something has taken over message delivery by calling
+    /// [`SignalingChannel::with_msg_channel`](crate::common::channel::SignalingChannel::with_msg_channel)
+    /// on [`SignalingClient::channel`] — which is what
+    /// [`ClientMessageTransport`](crate::util::ClientMessageTransport) does.
     Message(JsonValue),
+    /// The connection to the signaling service was lost and will be retried.
     ConnectionReconnect,
+    /// The connection to the signaling service changed state.
     ConnectionStateChange(SignalingConnectionState),
+    /// The signaling channel to the device changed state.
     ChannelStateChange(SignalingChannelState),
-    Error,
+    /// The signaling service reported an error on the channel.
+    Error(Error),
 }
 
-#[allow(dead_code)]
 pub struct SignalingClientOptions {
     pub(crate) product_id: String,
     pub(crate) device_id: String,
@@ -77,7 +88,10 @@ impl SignalingClientOptionsBuilder {
         self
     }
 
-    /// Set whether the device must be online.
+    /// Require the device to be online when the client connects.
+    ///
+    /// When set, [`SignalingClient::new`] fails with [`Error::DeviceOffline`]
+    /// instead of returning a client that cannot reach the device.
     pub fn require_online(mut self, val: bool) -> Self {
         self.require_online = Some(val);
         self
@@ -153,9 +167,16 @@ impl SignalingClient {
 
         let (channel_request_tx, channel_request_rx) = mpsc::channel(32);
 
-        let response = http_api.client_connect(None).await?;
+        let response = http_api
+            .client_connect(options.access_token.as_deref())
+            .await?;
         let signaling_url = response.signaling_url;
         let device_online = response.device_online.unwrap_or(false);
+        let require_online = options.require_online.unwrap_or(false);
+
+        if require_online && !device_online {
+            return Err(Error::DeviceOffline);
+        }
 
         if let Some(cid) = response.channel_id {
             let mut client = Self {
@@ -178,6 +199,12 @@ impl SignalingClient {
                 connected_at: None,
                 should_stop: false,
             };
+
+            // Forward the channel's messages and state changes onto the event
+            // channel, so the receiver returned here is a complete view of what
+            // the client is doing.
+            client.spawn_message_forwarder();
+            client.spawn_channel_state_forwarder();
 
             if device_online {
                 client
@@ -406,6 +433,9 @@ impl SignalingClient {
             code,
             message.unwrap_or_default()
         ));
+        self.emit(SignalingClientEvent::Error(Error::Signaling(
+            error.to_string(),
+        )));
         self.channel.handle_error(error);
     }
 
@@ -424,6 +454,7 @@ impl SignalingClient {
         self.service.ws_handle = None;
         self.service.ws_event_rx = None;
 
+        self.emit(SignalingClientEvent::ConnectionReconnect);
         self.set_connection_state(SignalingConnectionState::WaitRetry);
     }
 
@@ -431,8 +462,71 @@ impl SignalingClient {
         if self.service.connection_state != new_state {
             self.service.connection_state = new_state;
             let event = SignalingClientEvent::ConnectionStateChange(self.service.connection_state);
-            let _ = self.event_tx.try_send(event);
+            self.emit(event);
         }
+    }
+
+    /// Emit an event, logging rather than silently dropping when the
+    /// application is not draining the event channel.
+    fn emit(&self, event: SignalingClientEvent) {
+        if self.event_tx.try_send(event).is_err() {
+            warn!(
+                "[{}] Dropped event: the event receiver is full or has been dropped",
+                self.name
+            );
+        }
+    }
+
+    /// Deliver inbound signaling messages as [`SignalingClientEvent::Message`].
+    ///
+    /// Installs the channel's message sender. Anything that later calls
+    /// [`SignalingChannel::with_msg_channel`] replaces it and takes over
+    /// delivery, which ends this task when the sender is dropped.
+    fn spawn_message_forwarder(&mut self) {
+        let mut message_rx = self.channel.with_msg_channel();
+        let event_tx = self.event_tx.clone();
+        let name = self.name;
+
+        tokio::spawn(async move {
+            while let Some(message) = message_rx.recv().await {
+                if event_tx
+                    .send(SignalingClientEvent::Message(message))
+                    .await
+                    .is_err()
+                {
+                    debug!(
+                        "[{}] Event receiver dropped, stopping message forwarder",
+                        name
+                    );
+                    break;
+                }
+            }
+        });
+    }
+
+    /// Deliver channel state changes as
+    /// [`SignalingClientEvent::ChannelStateChange`].
+    fn spawn_channel_state_forwarder(&mut self) {
+        let (state_tx, mut state_rx) = mpsc::channel(32);
+        self.channel.set_state_sender(state_tx);
+        let event_tx = self.event_tx.clone();
+        let name = self.name;
+
+        tokio::spawn(async move {
+            while let Some(state) = state_rx.recv().await {
+                if event_tx
+                    .send(SignalingClientEvent::ChannelStateChange(state))
+                    .await
+                    .is_err()
+                {
+                    debug!(
+                        "[{}] Event receiver dropped, stopping channel state forwarder",
+                        name
+                    );
+                    break;
+                }
+            }
+        });
     }
 }
 
