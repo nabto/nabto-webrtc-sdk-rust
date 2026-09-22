@@ -52,6 +52,54 @@ async fn collect_channels(
     result
 }
 
+/// Helper: wait for N NewChannel events and key them by each client's first
+/// message, consuming that message.
+///
+/// [`collect_channels`] keys by channel id, which a test has no way to map back
+/// to the client that caused it. `HashMap` iteration order is arbitrary, so
+/// indexing into the keys picks a channel at random: a test that floods client
+/// A and then asserts on "the other" receiver silently asserts on A's own
+/// receiver about half the time, and passes without testing anything. Each
+/// client sends a distinct first message, so use that as the key instead.
+async fn collect_channels_by_label(
+    event_rx: &mut mpsc::Receiver<DeviceEvent>,
+    count: usize,
+) -> HashMap<String, mpsc::Receiver<JsonValue>> {
+    let channels = collect_channels(event_rx, count).await;
+    let mut result = HashMap::new();
+
+    for (channel_id, mut message_rx) in channels {
+        let init = tokio::time::timeout(Duration::from_secs(5), message_rx.recv())
+            .await
+            .unwrap_or_else(|_| {
+                panic!("Timed out waiting for the initial message on channel {channel_id}")
+            })
+            .unwrap_or_else(|| panic!("Channel {channel_id} closed before its initial message"));
+
+        let label = init
+            .as_str()
+            .unwrap_or_else(|| panic!("Expected a string initial message, got {init}"))
+            .to_string();
+
+        if let Some(previous) = result.insert(label.clone(), message_rx) {
+            drop(previous);
+            panic!("Two channels reported the same initial message {label:?}");
+        }
+    }
+
+    result
+}
+
+/// Take the receiver a client's initial message identified.
+fn take_labelled(
+    channels: &mut HashMap<String, mpsc::Receiver<JsonValue>>,
+    label: &str,
+) -> mpsc::Receiver<JsonValue> {
+    channels
+        .remove(label)
+        .unwrap_or_else(|| panic!("No channel delivered the initial message {label:?}"))
+}
+
 /// HOL Blocking Test 1:
 /// Channel B receives messages promptly even when channel A has a high
 /// volume of messages. Both channels process independently.
@@ -84,15 +132,11 @@ async fn test_no_hol_blocking_high_volume_on_one_channel() {
         .await
         .unwrap();
 
-    // Wait for both NewChannel events
-    let mut channels = collect_channels(&mut event_rx, 2).await;
-    let channel_ids: Vec<String> = channels.keys().cloned().collect();
-    let mut msg_rx_first = channels.remove(&channel_ids[0]).unwrap();
-    let mut msg_rx_second = channels.remove(&channel_ids[1]).unwrap();
-
-    // Consume initial messages
-    msg_rx_first.recv().await.unwrap();
-    msg_rx_second.recv().await.unwrap();
+    // Wait for both NewChannel events. Identifying the receivers by their
+    // initial message is what ties each one to the client that will be flooded.
+    let mut channels = collect_channels_by_label(&mut event_rx, 2).await;
+    let mut msg_rx_a = take_labelled(&mut channels, "init_a");
+    let mut msg_rx_b = take_labelled(&mut channels, "init_b");
 
     // Flood channel A with many messages. Because client_send_messages sends
     // via HTTP to the test server, these get forwarded through the WebSocket
@@ -108,20 +152,21 @@ async fn test_no_hol_blocking_high_volume_on_one_channel() {
     // Channel B should receive its message within a reasonable timeout.
     // With per-channel actors, channel B's actor processes independently of
     // channel A's high volume.
-    let msg = tokio::time::timeout(Duration::from_secs(5), msg_rx_second.recv())
+    let msg = tokio::time::timeout(Duration::from_secs(5), msg_rx_b.recv())
         .await
         .expect("Channel B should receive message without HOL blocking")
         .unwrap();
 
-    // We received a message on the second channel — it wasn't blocked by the first
-    println!("Second channel received: {:?}", msg);
+    // Channel B's own message got through, not one of A's flood.
+    assert_eq!(msg, JsonValue::String("important".to_string()));
+    println!("Channel B received: {:?}", msg);
 
-    // First channel should also eventually deliver messages
-    let msg = tokio::time::timeout(Duration::from_secs(5), msg_rx_first.recv())
+    // Channel A should also eventually deliver its messages
+    let msg = tokio::time::timeout(Duration::from_secs(5), msg_rx_a.recv())
         .await
         .expect("Channel A should eventually receive messages")
         .unwrap();
-    println!("First channel received: {:?}", msg);
+    println!("Channel A received: {:?}", msg);
 
     device.stop().await;
     test.destroy().await.unwrap();
@@ -160,16 +205,14 @@ async fn test_unconsumed_channel_does_not_block_others() {
         .await
         .unwrap();
 
-    let mut channels = collect_channels(&mut event_rx, 2).await;
-    let channel_ids: Vec<String> = channels.keys().cloned().collect();
+    let mut channels = collect_channels_by_label(&mut event_rx, 2).await;
 
-    // Deliberately do NOT take channel A's message_rx — it will be dropped,
-    // simulating an application that never reads from this channel.
-    let _dropped_rx = channels.remove(&channel_ids[0]).unwrap();
-    let mut msg_rx_b = channels.remove(&channel_ids[1]).unwrap();
-
-    // Consume initial message on channel B only
-    msg_rx_b.recv().await.unwrap();
+    // Deliberately drop channel A's message_rx, simulating an application that
+    // never reads from this channel. This has to be A's receiver specifically:
+    // A is the channel that gets flooded below.
+    let dropped_rx = take_labelled(&mut channels, "init_a");
+    let mut msg_rx_b = take_labelled(&mut channels, "init_b");
+    drop(dropped_rx);
 
     // Send many messages on channel A (they'll fill the buffer and be dropped)
     let flood: Vec<String> = (1..=50).map(|i| format!("flood_{}", i)).collect();
@@ -188,6 +231,10 @@ async fn test_unconsumed_channel_does_not_block_others() {
         .await
         .expect("Channel B should receive message even when channel A is unconsumed")
         .unwrap();
+
+    // It must be B's own message: receiving one of A's flood messages here
+    // would mean the test picked the wrong receiver.
+    assert_eq!(msg, JsonValue::String("still_works".to_string()));
     println!("Channel B received: {:?}", msg);
 
     device.stop().await;
@@ -224,14 +271,9 @@ async fn test_concurrent_interleaved_message_delivery() {
         .await
         .unwrap();
 
-    let mut channels = collect_channels(&mut event_rx, 2).await;
-    let channel_ids: Vec<String> = channels.keys().cloned().collect();
-    let mut msg_rx_first = channels.remove(&channel_ids[0]).unwrap();
-    let mut msg_rx_second = channels.remove(&channel_ids[1]).unwrap();
-
-    // Consume initial messages
-    msg_rx_first.recv().await.unwrap();
-    msg_rx_second.recv().await.unwrap();
+    let mut channels = collect_channels_by_label(&mut event_rx, 2).await;
+    let mut msg_rx_a = take_labelled(&mut channels, "init_a");
+    let mut msg_rx_b = take_labelled(&mut channels, "init_b");
 
     // Send messages on both channels in an interleaved pattern
     let n = 10;
@@ -244,31 +286,43 @@ async fn test_concurrent_interleaved_message_delivery() {
             .unwrap();
     }
 
-    // Both channels should receive all N messages
-    let mut first_count = 0;
-    let mut second_count = 0;
+    // Both channels should receive all N messages, and each channel should see
+    // only its own: now that the receivers are identified, cross-delivery is
+    // detectable rather than just being counted.
+    let mut a_count = 0;
+    let mut b_count = 0;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
 
-    while first_count < n || second_count < n {
+    while a_count < n || b_count < n {
         tokio::select! {
-            msg = msg_rx_first.recv() => {
-                msg.expect("Channel closed unexpectedly");
-                first_count += 1;
+            msg = msg_rx_a.recv() => {
+                let msg = msg.expect("Channel closed unexpectedly");
+                let msg = msg.as_str().expect("Expected a string message");
+                assert!(
+                    msg.starts_with("a_"),
+                    "Channel A received {msg:?}, which was sent to channel B"
+                );
+                a_count += 1;
             }
-            msg = msg_rx_second.recv() => {
-                msg.expect("Channel closed unexpectedly");
-                second_count += 1;
+            msg = msg_rx_b.recv() => {
+                let msg = msg.expect("Channel closed unexpectedly");
+                let msg = msg.as_str().expect("Expected a string message");
+                assert!(
+                    msg.starts_with("b_"),
+                    "Channel B received {msg:?}, which was sent to channel A"
+                );
+                b_count += 1;
             }
             _ = tokio::time::sleep_until(deadline) => {
                 panic!(
-                    "Timeout: received {}/{} on first channel, {}/{} on second channel",
-                    first_count, n, second_count, n
+                    "Timeout: received {}/{} on channel A, {}/{} on channel B",
+                    a_count, n, b_count, n
                 );
             }
         }
     }
 
-    println!("Both channels received all {} messages each", n);
+    println!("Both channels received all {} of their own messages", n);
 
     device.stop().await;
     test.destroy().await.unwrap();
