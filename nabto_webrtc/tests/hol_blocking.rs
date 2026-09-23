@@ -13,17 +13,13 @@
 
 mod common;
 
-use common::{DeviceTestInstance, DeviceTestOptions};
+use common::{init_logger, DeviceTestInstance, DeviceTestOptions};
 use nabto_webrtc::common::SignalingConnectionState;
 use nabto_webrtc::device::DeviceEvent;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::sync::mpsc;
-
-fn init_logger() {
-    let _ = env_logger::builder().is_test(true).try_init();
-}
 
 /// Helper: wait for N NewChannel events and return (channel_id → message_rx) map.
 async fn collect_channels(

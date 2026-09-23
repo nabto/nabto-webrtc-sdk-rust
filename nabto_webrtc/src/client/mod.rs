@@ -19,6 +19,20 @@ use tokio_tungstenite::connect_async;
 
 /// Events emitted by a [`SignalingClient`] on the receiver returned from
 /// [`SignalingClient::new`].
+///
+/// The receiver is bounded and shared by every event kind, so drain it
+/// promptly. Messages apply backpressure when it is full, but state changes,
+/// reconnects and errors are dropped with a warning and are never re-emitted:
+/// an application that lets messages pile up loses track of the connection.
+/// Applications that expect a high message rate should take message delivery
+/// off this receiver with
+/// [`SignalingChannel::with_msg_channel`](crate::common::channel::SignalingChannel::with_msg_channel),
+/// as [`ClientMessageTransport`](crate::util::ClientMessageTransport) does.
+///
+/// Ordering is preserved within an event kind, but not between kinds:
+/// messages and channel state changes are relayed on separate tasks, so a
+/// [`ChannelStateChange`](Self::ChannelStateChange) may be observed before a
+/// message that preceded it on the wire.
 pub enum SignalingClientEvent {
     /// A signaling message was received from the device.
     ///
@@ -428,6 +442,22 @@ impl SignalingClient {
     }
 
     fn handle_channel_error(&mut self, _channel_id: String, code: String, message: Option<String>) {
+        // The channel ignores errors once it is Closed or Failed, so do not
+        // report to the application what will have no effect: a second ERROR
+        // frame on a failed channel would otherwise run its teardown twice.
+        if matches!(
+            self.channel.state(),
+            SignalingChannelState::Closed | SignalingChannelState::Failed
+        ) {
+            debug!(
+                "[{}] Ignoring channel error {} on {:?} channel",
+                self.name,
+                code,
+                self.channel.state()
+            );
+            return;
+        }
+
         // Build the description once. Wrapping an Error in another Error gave
         // the event a doubled "Signaling error: Signaling error: ..." message,
         // and unwrap_or_default left a dangling " - " when the peer sent no

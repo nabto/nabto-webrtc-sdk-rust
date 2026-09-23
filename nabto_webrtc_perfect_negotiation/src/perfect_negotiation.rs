@@ -271,10 +271,10 @@ impl PerfectNegotiation {
 
         let result = self.pc.add_ice_candidate(rtc_candidate).await;
 
-        if let Err(err) = result {
-            if !ignore_offer {
-                error!("Error adding ICE candidate: {:?}", err);
-            }
+        if let Err(err) = result
+            && !ignore_offer
+        {
+            error!("Error adding ICE candidate: {:?}", err);
         }
     }
 

@@ -27,8 +27,10 @@ pub enum Error {
     /// An HTTP request to the signaling service returned a non-2xx status.
     ///
     /// `retry_after` is populated from the response's `Retry-After` header for
-    /// the statuses where the service uses it (429 and 503). Callers that
-    /// implement their own backoff should honour it; see [`Error::retry_after`].
+    /// the statuses where the service uses it (429 and 503). A 429 without a
+    /// usable header gets a default wait; a 503 without one gets `None`, so
+    /// the caller's normal backoff applies. Callers that implement their own
+    /// backoff should honour it; see [`Error::retry_after`].
     Http {
         /// HTTP status code of the response.
         status: u16,
@@ -60,8 +62,11 @@ impl Error {
     /// said so.
     ///
     /// Only populated for the statuses that carry a `Retry-After` header (429
-    /// and 503). Callers doing their own retries should prefer this over a
-    /// locally invented backoff.
+    /// and 503); a 429 always carries a wait, a 503 only when the service sent
+    /// one. Callers doing their own retries should prefer this over a locally
+    /// invented backoff, and should cap it as [`SignalingDevice`] does.
+    ///
+    /// [`SignalingDevice`]: crate::device::SignalingDevice
     pub fn retry_after(&self) -> Option<Duration> {
         match self {
             Error::Http { retry_after, .. } => *retry_after,

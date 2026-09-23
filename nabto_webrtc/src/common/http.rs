@@ -220,11 +220,16 @@ impl HttpApi {
             .map(|e| e.message.clone())
             .unwrap_or_else(|| format!("HTTP error: {}", status));
 
-        // A missing or unparseable Retry-After on a rate limit still means
-        // "back off"; match the JS SDK and fall back to 5 minutes rather than
-        // letting the caller retry immediately.
+        // A 429 is the service shedding load: a missing or unusable
+        // Retry-After still means "back off", so match the JS SDK and fall
+        // back to 5 minutes rather than letting the caller retry immediately.
+        //
+        // A 503 only carries a wait when the service actually asked for one.
+        // A transient 503 from a load balancer or a deploy must not park the
+        // caller for 5 minutes when its normal backoff would retry in seconds.
         let retry_after = match status {
-            429 | 503 => Some(retry_after.unwrap_or(DEFAULT_RETRY_AFTER)),
+            429 => Some(retry_after.unwrap_or(DEFAULT_RETRY_AFTER)),
+            503 => retry_after,
             _ => None,
         };
 
@@ -258,8 +263,9 @@ const DEFAULT_RETRY_AFTER: Duration = Duration::from_secs(300);
 /// Parse a `Retry-After` header value.
 ///
 /// The header is either a number of seconds or an HTTP-date (RFC 9110).
-/// Returns `None` if the header is absent or cannot be parsed, and for dates
-/// already in the past.
+/// Returns `None` if the header is absent or cannot be parsed, and for
+/// HTTP-dates that are not in the future, so the caller applies its own
+/// fallback instead of retrying immediately.
 fn parse_retry_after(value: Option<&str>) -> Option<Duration> {
     let value = value?.trim();
 
@@ -274,8 +280,15 @@ fn parse_retry_after(value: Option<&str>) -> Option<Duration> {
 
     let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
 
-    // A date in the past means "retry now".
-    Some(Duration::from_secs(target.saturating_sub(now)))
+    // A date that is not in the future carries no usable wait. Treat it as
+    // absent rather than as "retry now": on a 429 that would mean retrying
+    // immediately against a rate-limited endpoint, which is what the header
+    // was sent to prevent, and clock skew between device and service makes
+    // this case common. The JS SDK likewise falls back for a negative wait.
+    if target <= now {
+        return None;
+    }
+    Some(Duration::from_secs(target - now))
 }
 
 /// Parse an IMF-fixdate (`Sun, 06 Nov 1994 08:49:37 GMT`) into a unix
@@ -327,7 +340,7 @@ fn parse_http_date(value: &str) -> Option<u64> {
     }
 
     // Dates before the epoch are already in the past; the caller treats those
-    // the same as "retry now".
+    // as carrying no usable wait.
     if year < 1970 {
         return Some(0);
     }
@@ -401,10 +414,11 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        // A date well in the past yields a zero wait, not an underflow.
+        // A date in the past carries no usable wait: it must not become a
+        // zero-second "retry now" against a rate-limited endpoint.
         assert_eq!(
             parse_retry_after(Some("Sun, 06 Nov 1994 08:49:37 GMT")),
-            Some(Duration::ZERO)
+            None
         );
 
         // A date in the future yields roughly the remaining time.
@@ -561,6 +575,36 @@ mod tests {
         let err = client_connect_error(
             "429 Too Many Requests",
             "Content-Type: application/json\r\n",
+            r#"{"message":"slow down"}"#,
+        )
+        .await;
+
+        assert_eq!(err.status(), Some(429));
+        assert_eq!(err.retry_after(), Some(DEFAULT_RETRY_AFTER));
+    }
+
+    /// A 503 without the header is a transient failure, not a rate limit: the
+    /// caller's normal backoff applies, not the 5-minute 429 fallback.
+    #[tokio::test]
+    async fn test_503_without_retry_after_has_no_fallback() {
+        let err = client_connect_error(
+            "503 Service Unavailable",
+            "Content-Type: application/json\r\n",
+            r#"{"message":"maintenance"}"#,
+        )
+        .await;
+
+        assert_eq!(err.status(), Some(503));
+        assert_eq!(err.retry_after(), None);
+    }
+
+    /// A 429 with a Retry-After date in the past must fall back to the
+    /// default wait rather than retry immediately.
+    #[tokio::test]
+    async fn test_429_with_past_date_falls_back() {
+        let err = client_connect_error(
+            "429 Too Many Requests",
+            "Retry-After: Sun, 06 Nov 1994 08:49:37 GMT\r\nContent-Type: application/json\r\n",
             r#"{"message":"slow down"}"#,
         )
         .await;

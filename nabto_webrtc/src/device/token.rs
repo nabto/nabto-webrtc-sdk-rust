@@ -5,7 +5,7 @@
 use crate::{Error, Result};
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use p256::ecdsa::SigningKey;
-use p256::pkcs8::{DecodePrivateKey, EncodePublicKey};
+use p256::pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -70,11 +70,16 @@ impl DeviceTokenGenerator {
         private_key: String,
         token_lifetime: Duration,
     ) -> Result<Self> {
-        let key_id = Self::derive_key_id(&private_key)?;
+        // Parse the PEM once and derive everything else from the parsed key.
+        let signing_key = SigningKey::from_pkcs8_pem(&private_key)
+            .map_err(|e| Error::Configuration(format!("Invalid private key: {}", e)))?;
 
-        let encoding_key = EncodingKey::from_ec_pem(private_key.as_bytes()).map_err(|e| {
-            Error::Configuration(format!("Failed to parse private key for signing: {}", e))
+        let key_id = Self::derive_key_id(&signing_key)?;
+
+        let pkcs8_der = signing_key.to_pkcs8_der().map_err(|e| {
+            Error::Configuration(format!("Failed to encode private key for signing: {}", e))
         })?;
+        let encoding_key = EncodingKey::from_ec_der(pkcs8_der.as_bytes());
 
         Ok(Self {
             encoding_key,
@@ -94,14 +99,10 @@ impl DeviceTokenGenerator {
         &self.key_id
     }
 
-    /// Derive the key id from a PEM encoded private key.
+    /// Derive the key id from a parsed private key.
     ///
     /// The key id is computed as "device:" + hex(sha256(SubjectPublicKeyInfo))
-    fn derive_key_id(private_key: &str) -> Result<String> {
-        // Parse the private key
-        let signing_key = SigningKey::from_pkcs8_pem(private_key)
-            .map_err(|e| Error::Configuration(format!("Invalid private key: {}", e)))?;
-
+    fn derive_key_id(signing_key: &SigningKey) -> Result<String> {
         // Get the verifying key (public key)
         let verifying_key = signing_key.verifying_key();
 
