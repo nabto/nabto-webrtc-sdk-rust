@@ -35,6 +35,14 @@ const RECONNECT_COUNTER_RESET_TIMEOUT: Duration = Duration::from_secs(10);
 /// Maximum reconnect wait time (60 seconds)
 const MAX_RECONNECT_WAIT_SECONDS: u32 = 60;
 
+/// Ceiling on a `Retry-After` wait requested by the service.
+///
+/// The header is honoured over our own backoff and is allowed to exceed
+/// [`MAX_RECONNECT_WAIT_SECONDS`], but it comes off the network: a bogus value
+/// from the service or an intermediary proxy must not park the device offline
+/// for days with a restart as the only way out.
+const MAX_RETRY_AFTER_SECONDS: u32 = 60 * 60;
+
 /// Callback type for generating access tokens
 pub type TokenGenerator =
     Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<String>> + Send>> + Send + Sync>;
@@ -221,6 +229,9 @@ pub struct SignalingDevice {
 
     // Retry state
     reconnect_counter: u32,
+    /// Wait requested by the service via `Retry-After`, honoured once in place
+    /// of the exponential backoff, capped at [`MAX_RETRY_AFTER_SECONDS`].
+    retry_after: Option<Duration>,
     connected_at: Option<Instant>,
     should_stop: bool,
 }
@@ -266,6 +277,7 @@ impl SignalingDevice {
             channel_request_tx,
             channel_request_rx: Some(channel_request_rx),
             reconnect_counter: 0,
+            retry_after: None,
             connected_at: None,
             should_stop: false,
         };
@@ -322,7 +334,7 @@ impl SignalingDevice {
                 SignalingConnectionState::New | SignalingConnectionState::WaitRetry => {
                     // Calculate retry delay if we're in WaitRetry
                     if self.state == SignalingConnectionState::WaitRetry {
-                        let wait_seconds = self.calculate_reconnect_delay();
+                        let wait_seconds = self.take_reconnect_delay();
                         info!(
                             "[{}] Waiting {} seconds before reconnecting...",
                             self.name, wait_seconds
@@ -363,6 +375,14 @@ impl SignalingDevice {
                         }
                         Err(e) => {
                             warn!("[{}] Connection failed: {:?}", self.name, e);
+                            if let Some(retry_after) = e.retry_after() {
+                                info!(
+                                    "[{}] Service asked us to retry after {}s",
+                                    self.name,
+                                    retry_after.as_secs()
+                                );
+                                self.retry_after = Some(retry_after);
+                            }
                             self.set_state(SignalingConnectionState::WaitRetry);
                             self.reconnect_counter += 1;
                         }
@@ -437,6 +457,29 @@ impl SignalingDevice {
         }
 
         Ok(())
+    }
+
+    /// The delay before the next reconnect attempt, consuming any pending
+    /// `Retry-After` hint from the service.
+    ///
+    /// A wait the service asked for wins over our own backoff and may exceed
+    /// [`MAX_RECONNECT_WAIT_SECONDS`]: that cap exists to keep our backoff
+    /// responsive, not to override what the service told us to do. It is only
+    /// clamped to [`MAX_RETRY_AFTER_SECONDS`] as protection against a bogus
+    /// header.
+    fn take_reconnect_delay(&mut self) -> u32 {
+        if let Some(retry_after) = self.retry_after.take() {
+            let requested = retry_after.as_secs();
+            let capped = requested.min(MAX_RETRY_AFTER_SECONDS as u64) as u32;
+            if u64::from(capped) < requested {
+                warn!(
+                    "[{}] Service asked us to retry after {}s, capping at {}s",
+                    self.name, requested, capped
+                );
+            }
+            return capped;
+        }
+        self.calculate_reconnect_delay()
     }
 
     /// Calculate the reconnect delay based on the reconnect counter
@@ -834,5 +877,79 @@ impl SignalingDevice {
                 error!("[{}] Failed to send error message: {}", self.name, e);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_device() -> SignalingDevice {
+        let token_generator: TokenGenerator =
+            Arc::new(|| Box::pin(async { Ok("test-token".to_string()) }));
+        let options = SignalingDeviceOptions::builder(
+            "wp-test".to_string(),
+            "wd-test".to_string(),
+            token_generator,
+        )
+        .build();
+        let (device, _event_rx, _command_tx) = SignalingDevice::new(options);
+        device
+    }
+
+    #[test]
+    fn test_reconnect_delay_is_exponential_and_capped() {
+        let mut device = test_device();
+
+        for (counter, expected) in [(0, 1), (1, 2), (2, 4), (5, 32), (6, 60), (10, 60)] {
+            device.reconnect_counter = counter;
+            assert_eq!(
+                device.take_reconnect_delay(),
+                expected,
+                "unexpected delay for reconnect counter {}",
+                counter
+            );
+        }
+    }
+
+    /// A wait the service asked for wins over our own backoff, and is not
+    /// clamped to MAX_RECONNECT_WAIT_SECONDS: that cap exists to keep our own
+    /// backoff responsive, not to override the service.
+    #[test]
+    fn test_retry_after_overrides_backoff_and_exceeds_backoff_cap() {
+        let mut device = test_device();
+        device.reconnect_counter = 1; // would otherwise be 2 seconds
+        device.retry_after = Some(Duration::from_secs(300));
+
+        assert_eq!(device.take_reconnect_delay(), 300);
+    }
+
+    /// The header comes off the network, so an absurd value is clamped rather
+    /// than parking the device offline indefinitely.
+    #[test]
+    fn test_retry_after_is_capped_against_bogus_values() {
+        let mut device = test_device();
+
+        device.retry_after = Some(Duration::from_secs(86_400));
+        assert_eq!(device.take_reconnect_delay(), MAX_RETRY_AFTER_SECONDS);
+
+        device.retry_after = Some(Duration::from_secs(u64::MAX));
+        assert_eq!(device.take_reconnect_delay(), MAX_RETRY_AFTER_SECONDS);
+
+        // Exactly at the cap is not touched.
+        device.retry_after = Some(Duration::from_secs(MAX_RETRY_AFTER_SECONDS as u64));
+        assert_eq!(device.take_reconnect_delay(), MAX_RETRY_AFTER_SECONDS);
+    }
+
+    /// The hint applies to one attempt only; after that we are back on our own
+    /// backoff.
+    #[test]
+    fn test_retry_after_is_consumed_once() {
+        let mut device = test_device();
+        device.reconnect_counter = 3; // 8 seconds
+        device.retry_after = Some(Duration::from_secs(120));
+
+        assert_eq!(device.take_reconnect_delay(), 120);
+        assert_eq!(device.take_reconnect_delay(), 8);
     }
 }

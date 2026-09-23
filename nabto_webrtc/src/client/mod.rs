@@ -17,15 +17,40 @@ use tokio::sync::mpsc;
 use tokio::time::Instant;
 use tokio_tungstenite::connect_async;
 
+/// Events emitted by a [`SignalingClient`] on the receiver returned from
+/// [`SignalingClient::new`].
+///
+/// The receiver is bounded and shared by every event kind, so drain it
+/// promptly. Messages apply backpressure when it is full, but state changes,
+/// reconnects and errors are dropped with a warning and are never re-emitted:
+/// an application that lets messages pile up loses track of the connection.
+/// Applications that expect a high message rate should take message delivery
+/// off this receiver with
+/// [`SignalingChannel::with_msg_channel`](crate::common::channel::SignalingChannel::with_msg_channel),
+/// as [`ClientMessageTransport`](crate::util::ClientMessageTransport) does.
+///
+/// Ordering is preserved within an event kind, but not between kinds:
+/// messages and channel state changes are relayed on separate tasks, so a
+/// [`ChannelStateChange`](Self::ChannelStateChange) may be observed before a
+/// message that preceded it on the wire.
 pub enum SignalingClientEvent {
+    /// A signaling message was received from the device.
+    ///
+    /// Not emitted if something has taken over message delivery by calling
+    /// [`SignalingChannel::with_msg_channel`](crate::common::channel::SignalingChannel::with_msg_channel)
+    /// on [`SignalingClient::channel`] — which is what
+    /// [`ClientMessageTransport`](crate::util::ClientMessageTransport) does.
     Message(JsonValue),
+    /// The connection to the signaling service was lost and will be retried.
     ConnectionReconnect,
+    /// The connection to the signaling service changed state.
     ConnectionStateChange(SignalingConnectionState),
+    /// The signaling channel to the device changed state.
     ChannelStateChange(SignalingChannelState),
-    Error,
+    /// The signaling service reported an error on the channel.
+    Error(Error),
 }
 
-#[allow(dead_code)]
 pub struct SignalingClientOptions {
     pub(crate) product_id: String,
     pub(crate) device_id: String,
@@ -77,7 +102,10 @@ impl SignalingClientOptionsBuilder {
         self
     }
 
-    /// Set whether the device must be online.
+    /// Require the device to be online when the client connects.
+    ///
+    /// When set, [`SignalingClient::new`] fails with [`Error::DeviceOffline`]
+    /// instead of returning a client that cannot reach the device.
     pub fn require_online(mut self, val: bool) -> Self {
         self.require_online = Some(val);
         self
@@ -153,9 +181,16 @@ impl SignalingClient {
 
         let (channel_request_tx, channel_request_rx) = mpsc::channel(32);
 
-        let response = http_api.client_connect(None).await?;
+        let response = http_api
+            .client_connect(options.access_token.as_deref())
+            .await?;
         let signaling_url = response.signaling_url;
         let device_online = response.device_online.unwrap_or(false);
+        let require_online = options.require_online.unwrap_or(false);
+
+        if require_online && !device_online {
+            return Err(Error::DeviceOffline);
+        }
 
         if let Some(cid) = response.channel_id {
             let mut client = Self {
@@ -178,6 +213,12 @@ impl SignalingClient {
                 connected_at: None,
                 should_stop: false,
             };
+
+            // Forward the channel's messages and state changes onto the event
+            // channel, so the receiver returned here is a complete view of what
+            // the client is doing.
+            client.spawn_message_forwarder();
+            client.spawn_channel_state_forwarder();
 
             if device_online {
                 client
@@ -401,12 +442,35 @@ impl SignalingClient {
     }
 
     fn handle_channel_error(&mut self, _channel_id: String, code: String, message: Option<String>) {
-        let error = Error::Signaling(format!(
-            "Channel error: {} - {}",
-            code,
-            message.unwrap_or_default()
-        ));
-        self.channel.handle_error(error);
+        // The channel ignores errors once it is Closed or Failed, so do not
+        // report to the application what will have no effect: a second ERROR
+        // frame on a failed channel would otherwise run its teardown twice.
+        if matches!(
+            self.channel.state(),
+            SignalingChannelState::Closed | SignalingChannelState::Failed
+        ) {
+            debug!(
+                "[{}] Ignoring channel error {} on {:?} channel",
+                self.name,
+                code,
+                self.channel.state()
+            );
+            return;
+        }
+
+        // Build the description once. Wrapping an Error in another Error gave
+        // the event a doubled "Signaling error: Signaling error: ..." message,
+        // and unwrap_or_default left a dangling " - " when the peer sent no
+        // message.
+        let description = match &message {
+            Some(message) => format!("Channel error: {} - {}", code, message),
+            None => format!("Channel error: {}", code),
+        };
+
+        self.emit(SignalingClientEvent::Error(Error::Signaling(
+            description.clone(),
+        )));
+        self.channel.handle_error(Error::Signaling(description));
     }
 
     fn calculate_reconnect_delay(&self) -> u32 {
@@ -424,6 +488,7 @@ impl SignalingClient {
         self.service.ws_handle = None;
         self.service.ws_event_rx = None;
 
+        self.emit(SignalingClientEvent::ConnectionReconnect);
         self.set_connection_state(SignalingConnectionState::WaitRetry);
     }
 
@@ -431,8 +496,71 @@ impl SignalingClient {
         if self.service.connection_state != new_state {
             self.service.connection_state = new_state;
             let event = SignalingClientEvent::ConnectionStateChange(self.service.connection_state);
-            let _ = self.event_tx.try_send(event);
+            self.emit(event);
         }
+    }
+
+    /// Emit an event, logging rather than silently dropping when the
+    /// application is not draining the event channel.
+    fn emit(&self, event: SignalingClientEvent) {
+        if self.event_tx.try_send(event).is_err() {
+            warn!(
+                "[{}] Dropped event: the event receiver is full or has been dropped",
+                self.name
+            );
+        }
+    }
+
+    /// Deliver inbound signaling messages as [`SignalingClientEvent::Message`].
+    ///
+    /// Installs the channel's message sender. Anything that later calls
+    /// [`SignalingChannel::with_msg_channel`] replaces it and takes over
+    /// delivery, which ends this task when the sender is dropped.
+    fn spawn_message_forwarder(&mut self) {
+        let mut message_rx = self.channel.with_msg_channel();
+        let event_tx = self.event_tx.clone();
+        let name = self.name;
+
+        tokio::spawn(async move {
+            while let Some(message) = message_rx.recv().await {
+                if event_tx
+                    .send(SignalingClientEvent::Message(message))
+                    .await
+                    .is_err()
+                {
+                    debug!(
+                        "[{}] Event receiver dropped, stopping message forwarder",
+                        name
+                    );
+                    break;
+                }
+            }
+        });
+    }
+
+    /// Deliver channel state changes as
+    /// [`SignalingClientEvent::ChannelStateChange`].
+    fn spawn_channel_state_forwarder(&mut self) {
+        let (state_tx, mut state_rx) = mpsc::channel(32);
+        self.channel.set_state_sender(state_tx);
+        let event_tx = self.event_tx.clone();
+        let name = self.name;
+
+        tokio::spawn(async move {
+            while let Some(state) = state_rx.recv().await {
+                if event_tx
+                    .send(SignalingClientEvent::ChannelStateChange(state))
+                    .await
+                    .is_err()
+                {
+                    debug!(
+                        "[{}] Event receiver dropped, stopping channel state forwarder",
+                        name
+                    );
+                    break;
+                }
+            }
+        });
     }
 }
 
