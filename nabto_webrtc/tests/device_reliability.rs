@@ -475,7 +475,7 @@ async fn test_reliability_5_discard_duplicate_messages() {
 }
 
 /// Reliability Test 6:
-/// Test that a peer resend unacked messages when a PEER_ONLINE event is received.
+/// Test that a peer resend unacked messages when a PEER_CONNECTED event is received.
 #[tokio::test]
 #[ignore] // Requires integration test server to be running
 async fn test_reliability_6_resend_unacked_messages_on_peer_online() {
@@ -518,7 +518,7 @@ async fn test_reliability_6_resend_unacked_messages_on_peer_online() {
             .expect("Failed to send message");
     }
 
-    // Disconnect and reconnect the client to trigger a PEER_ONLINE event
+    // Disconnect and reconnect the client to trigger a PEER_CONNECTED event
     test.disconnect_client(&client_id)
         .await
         .expect("Failed to disconnect client");
