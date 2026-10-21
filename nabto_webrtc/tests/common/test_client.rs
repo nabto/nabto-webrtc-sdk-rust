@@ -68,11 +68,18 @@ pub struct TestClient {
     base_url: String,
 }
 
+/// reqwest is built with `rustls-no-provider`; install ring (the only enabled
+/// provider) as the process default so a plain client can be built.
+fn http_client() -> reqwest::Client {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    reqwest::Client::new()
+}
+
 impl TestClient {
     /// Create a new test client
     pub fn new() -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: http_client(),
             base_url: BASE_URL.to_string(),
         }
     }
@@ -80,7 +87,7 @@ impl TestClient {
     /// Create a new test client with custom base URL
     pub fn with_url(base_url: String) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: http_client(),
             base_url,
         }
     }
