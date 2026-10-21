@@ -15,9 +15,11 @@ serde_json = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio-tungstenite = { workspace = true }
 futures = { workspace = true }
-reqwest = { workspace = true, features = ["json", "rustls-tls-webpki-roots"] }
-# Not used directly; enforces a minimum webpki-roots version for downstream users
+reqwest = { workspace = true, features = ["json", "rustls-no-provider"] }
+# Trust store for both reqwest and tokio-tungstenite; >= 1.0.10 excludes the compromised eMudhra root
 webpki-roots = { workspace = true }
+# Selects ring as the rustls crypto provider (reqwest 0.13 would otherwise pull in aws-lc-rs)
+rustls = { workspace = true }
 jsonwebtoken = { workspace = true }
 p256 = { workspace = true }
 sha2 = { workspace = true }

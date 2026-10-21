@@ -2,6 +2,7 @@ pub mod channel;
 pub mod http;
 pub mod reliability;
 pub mod routing;
+pub(crate) mod tls;
 pub mod websocket;
 
 pub use http::{HttpApi, IceServer};

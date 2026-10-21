@@ -12,6 +12,7 @@ use crate::common::channel::{ChannelHandle, ChannelRequest, SignalingChannel};
 use crate::common::routing::error_codes;
 use crate::common::routing::ErrorInfo;
 use crate::common::routing::RoutingMessage;
+use crate::common::tls::connect_websocket;
 use crate::common::SignalingConnectionState;
 use crate::common::{ConnectionEvent, WebSocketConnection, WebSocketHandle};
 use crate::common::{HttpApi, IceServer};
@@ -27,7 +28,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
-use tokio_tungstenite::connect_async;
 
 /// Minimum time between a successful connection and reconnect counter reset (10 seconds)
 const RECONNECT_COUNTER_RESET_TIMEOUT: Duration = Duration::from_secs(10);
@@ -664,7 +664,7 @@ impl SignalingDevice {
         let signaling_url = self.device_connect().await?;
 
         // Step 2: Establish WebSocket connection to the signaling URL
-        let (ws_stream, _response) = connect_async(&signaling_url)
+        let (ws_stream, _response) = connect_websocket(&signaling_url)
             .await
             .map_err(|e| Error::WebSocket(format!("Failed to connect WebSocket: {}", e)))?;
 

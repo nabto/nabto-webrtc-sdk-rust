@@ -369,7 +369,7 @@ impl WebSocketConnection {
         trace!("[{}] Sending message: {}", self.name, json);
 
         self.ws_stream
-            .send(WsMessage::Text(json))
+            .send(WsMessage::Text(json.into()))
             .await
             .map_err(|e| format!("Failed to send WebSocket message: {}", e))?;
 
@@ -424,7 +424,7 @@ mod tests {
                     if let Ok(RoutingMessage::Ping) = serde_json::from_str(&text) {
                         ping_count_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         let pong = serde_json::to_string(&RoutingMessage::Pong).unwrap();
-                        if ws.send(WsMessage::Text(pong)).await.is_err() {
+                        if ws.send(WsMessage::Text(pong.into())).await.is_err() {
                             break;
                         }
                     }

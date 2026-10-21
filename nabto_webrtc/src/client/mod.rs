@@ -4,6 +4,7 @@ use crate::common::channel::SignalingChannel;
 use crate::common::channel::SignalingService;
 use crate::common::http::HttpApi;
 use crate::common::routing::RoutingMessage;
+use crate::common::tls::connect_websocket;
 use crate::common::websocket::ConnectionEvent;
 use crate::common::websocket::WebSocketConnection;
 use crate::common::websocket::WebSocketHandle;
@@ -15,7 +16,6 @@ use serde_json::Value as JsonValue;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
-use tokio_tungstenite::connect_async;
 
 /// Events emitted by a [`SignalingClient`] on the receiver returned from
 /// [`SignalingClient::new`].
@@ -367,7 +367,7 @@ impl SignalingClient {
     }
 
     async fn try_connect(&mut self) -> Result<(), Error> {
-        let (ws_stream, _response) = connect_async(&self.signaling_url)
+        let (ws_stream, _response) = connect_websocket(&self.signaling_url)
             .await
             .map_err(|e| Error::WebSocket(format!("Failed to connect websocket: {}", e)))?;
 
