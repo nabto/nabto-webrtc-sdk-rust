@@ -16,6 +16,8 @@ tokio = { workspace = true, features = ["full"] }
 tokio-tungstenite = { workspace = true }
 futures = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls-webpki-roots"] }
+# Not used directly; enforces a minimum webpki-roots version for downstream users
+webpki-roots = { workspace = true }
 jsonwebtoken = { workspace = true }
 p256 = { workspace = true }
 sha2 = { workspace = true }
