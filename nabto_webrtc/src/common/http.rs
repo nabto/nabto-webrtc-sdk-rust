@@ -96,24 +96,13 @@ impl HttpApi {
             product_id,
             device_id,
             client: reqwest::Client::builder()
-                .tls_backend_preconfigured(Self::tls_config())
+                .tls_backend_preconfigured(super::tls::client_config())
                 .connect_timeout(std::time::Duration::from_secs(10))
                 .timeout(std::time::Duration::from_secs(30))
                 .pool_max_idle_per_host(0)
                 .build()
                 .expect("Failed to build HTTP client"),
         }
-    }
-
-    /// Trust the bundled webpki-roots, same as the WebSocket connection,
-    /// instead of reqwest's default OS trust store.
-    fn tls_config() -> rustls::ClientConfig {
-        let roots = rustls::RootCertStore {
-            roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
-        };
-        rustls::ClientConfig::builder()
-            .with_root_certificates(roots)
-            .with_no_client_auth()
     }
 
     pub async fn client_connect(&self, auth_token: Option<&str>) -> Result<ClientConnectResponse> {
