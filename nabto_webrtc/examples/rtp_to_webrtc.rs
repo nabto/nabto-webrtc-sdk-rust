@@ -105,7 +105,7 @@ impl RtcConnectionHandler {
                 if is_turn && (server.username.is_none() || server.credential.is_none()) {
                     warn!(
                         "[{}] Skipping TURN server with missing credentials: {:?}",
-                        channel_id, server
+                        channel_id, server.urls
                     );
                     continue;
                 }
@@ -117,8 +117,8 @@ impl RtcConnectionHandler {
                 };
 
                 debug!(
-                    "[{}] Adding ICE server - urls: {:?}, username: '{}', credential: '{}'",
-                    channel_id, rtc_server.urls, rtc_server.username, rtc_server.credential
+                    "[{}] Adding ICE server - urls: {:?}",
+                    channel_id, rtc_server.urls
                 );
 
                 rtc_ice_servers.push(rtc_server);
@@ -142,7 +142,8 @@ impl RtcConnectionHandler {
             }
             Err(e) => {
                 error!("[{}] Failed to create peer connection: {}", channel_id, e);
-                error!("[{}] ICE servers were: {:?}", channel_id, rtc_ice_servers);
+                let urls: Vec<_> = rtc_ice_servers.iter().map(|s| &s.urls).collect();
+                error!("[{}] ICE server urls were: {:?}", channel_id, urls);
                 return Err(e.into());
             }
         };
@@ -463,8 +464,8 @@ async fn main() -> Result<()> {
     if let Some(ref endpoint) = args.endpoint {
         println!("Endpoint: {}", endpoint);
     }
-    if let Some(ref secret) = shared_secret {
-        println!("Shared secret: {}", secret);
+    if shared_secret.is_some() {
+        println!("Shared secret: <set>");
     }
     println!();
 
