@@ -664,12 +664,10 @@ async fn main() -> Result<()> {
     println!();
 
     // Show video stream link if all required parameters are available
-    if shared_secret.is_some() {
-        println!("Video Stream Link (append &sharedSecret=<your shared secret>):");
-        println!(
-            "  https://nabto.github.io/nabto-webrtc-sdk-js?mode=client&productId={}&deviceId={}",
-            product_id_for_url, device_id_for_url
-        );
+    if let Some(ref secret) = shared_secret {
+        println!("Video Stream Link:");
+        println!("  https://nabto.github.io/nabto-webrtc-sdk-js?mode=client&productId={}&deviceId={}&sharedSecret={}",
+                 product_id_for_url, device_id_for_url, secret);
         println!();
     } else {
         println!("Video Stream Link: (incomplete - missing sharedSecret)");
