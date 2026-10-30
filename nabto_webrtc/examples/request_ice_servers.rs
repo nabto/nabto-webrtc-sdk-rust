@@ -103,14 +103,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             for (i, server) in ice_servers.iter().enumerate() {
                 println!("Server {}:", i + 1);
                 println!("  URLs: {:?}", server.urls);
-                if let Some(username) = &server.username {
-                    println!("  Username: {}", username);
+                if server.username.is_some() {
+                    println!("  Username: <redacted>");
                 }
-                if let Some(credential) = &server.credential {
-                    println!(
-                        "  Credential: {}...",
-                        &credential[..credential.len().min(20)]
-                    );
+                if server.credential.is_some() {
+                    println!("  Credential: <redacted>");
                 }
                 println!();
             }

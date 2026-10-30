@@ -117,8 +117,8 @@ impl RtcConnectionHandler {
                 };
 
                 debug!(
-                    "[{}] Adding ICE server - urls: {:?}, username: '{}', credential: '{}'",
-                    channel_id, rtc_server.urls, rtc_server.username, rtc_server.credential
+                    "[{}] Adding ICE server - urls: {:?}",
+                    channel_id, rtc_server.urls
                 );
 
                 rtc_ice_servers.push(rtc_server);
@@ -463,8 +463,8 @@ async fn main() -> Result<()> {
     if let Some(ref endpoint) = args.endpoint {
         println!("Endpoint: {}", endpoint);
     }
-    if let Some(ref secret) = shared_secret {
-        println!("Shared secret: {}", secret);
+    if shared_secret.is_some() {
+        println!("Shared secret: <set>");
     }
     println!();
 
@@ -663,10 +663,10 @@ async fn main() -> Result<()> {
     println!();
 
     // Show video stream link if all required parameters are available
-    if let Some(ref secret) = shared_secret {
-        println!("Video Stream Link:");
-        println!("  https://nabto.github.io/nabto-webrtc-sdk-js?mode=client&productId={}&deviceId={}&sharedSecret={}",
-                 product_id_for_url, device_id_for_url, secret);
+    if shared_secret.is_some() {
+        println!("Video Stream Link (append &sharedSecret=<your shared secret>):");
+        println!("  https://nabto.github.io/nabto-webrtc-sdk-js?mode=client&productId={}&deviceId={}",
+                 product_id_for_url, device_id_for_url);
         println!();
     } else {
         println!("Video Stream Link: (incomplete - missing sharedSecret)");
