@@ -105,7 +105,7 @@ impl RtcConnectionHandler {
                 if is_turn && (server.username.is_none() || server.credential.is_none()) {
                     warn!(
                         "[{}] Skipping TURN server with missing credentials: {:?}",
-                        channel_id, server
+                        channel_id, server.urls
                     );
                     continue;
                 }
@@ -142,7 +142,8 @@ impl RtcConnectionHandler {
             }
             Err(e) => {
                 error!("[{}] Failed to create peer connection: {}", channel_id, e);
-                error!("[{}] ICE servers were: {:?}", channel_id, rtc_ice_servers);
+                let urls: Vec<_> = rtc_ice_servers.iter().map(|s| &s.urls).collect();
+                error!("[{}] ICE server urls were: {:?}", channel_id, urls);
                 return Err(e.into());
             }
         };
@@ -665,8 +666,10 @@ async fn main() -> Result<()> {
     // Show video stream link if all required parameters are available
     if shared_secret.is_some() {
         println!("Video Stream Link (append &sharedSecret=<your shared secret>):");
-        println!("  https://nabto.github.io/nabto-webrtc-sdk-js?mode=client&productId={}&deviceId={}",
-                 product_id_for_url, device_id_for_url);
+        println!(
+            "  https://nabto.github.io/nabto-webrtc-sdk-js?mode=client&productId={}&deviceId={}",
+            product_id_for_url, device_id_for_url
+        );
         println!();
     } else {
         println!("Video Stream Link: (incomplete - missing sharedSecret)");
